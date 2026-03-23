@@ -123,7 +123,7 @@ export default function RideMap({ riders, myUserId, route, center, onRiderClick 
           return (
             <Polyline
               key={`trail-${rider.userId}`}
-              positions={rider.routeFollowed.slice(-30).map((p) => [p.lat, p.lng])}
+              positions={rider.routeFollowed.slice(-30).map((p) => [p.lat, p.lng] as L.LatLngTuple)}
               pathOptions={{
                 color: isMe ? '#00bfff' : rider.isLeader ? '#f59e0b' : '#22c55e',
                 weight: 2,
