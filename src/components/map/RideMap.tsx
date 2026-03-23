@@ -81,7 +81,7 @@ export default function RideMap({ riders, myUserId, route, center, onRiderClick 
         {/* Route polyline */}
         {route.length > 1 && (
           <Polyline
-            positions={route.map((p) => [p.lat, p.lng])}
+            positions={route.map((p) => [p.lat, p.lng] as L.LatLngTuple)}
             pathOptions={{ color: '#00bfff', weight: 4, opacity: 0.7, dashArray: '10 6' }}
           />
         )}
