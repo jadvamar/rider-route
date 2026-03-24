@@ -78,12 +78,20 @@ export default function RideMap({ riders, myUserId, route, center, onRiderClick 
         />
         <MapUpdater center={center} />
 
-        {/* Route polyline */}
+        {/* Route polyline — Google Maps style with border + fill */}
         {route.length > 1 && (
-          <Polyline
-            positions={route.map((p) => [p.lat, p.lng] as L.LatLngTuple)}
-            pathOptions={{ color: '#00bfff', weight: 4, opacity: 0.7, dashArray: '10 6' }}
-          />
+          <>
+            {/* Dark border/outline */}
+            <Polyline
+              positions={route.map((p) => [p.lat, p.lng] as L.LatLngTuple)}
+              pathOptions={{ color: '#1a73e8', weight: 8, opacity: 0.4, lineCap: 'round', lineJoin: 'round' }}
+            />
+            {/* Bright blue fill */}
+            <Polyline
+              positions={route.map((p) => [p.lat, p.lng] as L.LatLngTuple)}
+              pathOptions={{ color: '#4285F4', weight: 5, opacity: 1, lineCap: 'round', lineJoin: 'round' }}
+            />
+          </>
         )}
 
         {/* Rider markers */}
