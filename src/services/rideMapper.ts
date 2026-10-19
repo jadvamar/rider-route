@@ -44,5 +44,6 @@ export function mapApiRidersToSessions(apiRide: ApiRide): RiderSession[] {
     isOnRoute: r.onRoute ?? true,
     isOnline: r.online ?? true,
     routeFollowed: r.routeFollowed || [],
+    hasLeft: !!(r.closed || r.left),
   }));
 }

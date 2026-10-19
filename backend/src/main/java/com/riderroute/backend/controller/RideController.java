@@ -4,6 +4,7 @@ import com.riderroute.backend.dto.CreateRideRequest;
 import com.riderroute.backend.dto.JoinRideRequest;
 import com.riderroute.backend.dto.LocationUpdateRequest;
 import com.riderroute.backend.dto.TriggerSOSRequest;
+import com.riderroute.backend.dto.UpdateRideRequest;
 import com.riderroute.backend.model.Ride;
 import com.riderroute.backend.model.RideStatus;
 import com.riderroute.backend.service.RideService;
@@ -39,6 +40,12 @@ public class RideController {
         return rideService.listRidesByUser(userId);
     }
 
+    @DeleteMapping("/user/{userId}/history/{rideId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void removeFromHistory(@PathVariable String userId, @PathVariable String rideId) {
+        rideService.hideRideForUser(rideId, userId);
+    }
+
     @GetMapping("/{rideId}")
     public Ride getById(@PathVariable String rideId) {
         return rideService.getRideById(rideId);
@@ -47,6 +54,11 @@ public class RideController {
     @GetMapping("/by-code/{code}")
     public Ride getByCode(@PathVariable String code) {
         return rideService.getRideByCode(code);
+    }
+
+    @PutMapping("/{rideId}")
+    public Ride update(@PathVariable String rideId, @Valid @RequestBody UpdateRideRequest request) {
+        return rideService.updateRide(rideId, request);
     }
 
     @PostMapping("/{rideId}/join")
@@ -61,6 +73,11 @@ public class RideController {
             @Valid @RequestBody LocationUpdateRequest request
     ) {
         return rideService.updateLocation(rideId, userId, request);
+    }
+
+    @PostMapping("/{rideId}/riders/{userId}/close")
+    public Ride closeForRider(@PathVariable String rideId, @PathVariable String userId) {
+        return rideService.closeRideForRider(rideId, userId);
     }
 
     @PatchMapping("/{rideId}/status")

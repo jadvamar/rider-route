@@ -1,14 +1,15 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, MapPin, Navigation, Search, Loader2, Route, Crosshair, AlertCircle, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useRideStore } from '@/store/useRideStore';
-import { fetchRoutes, geocodeAddress, reverseGeocodeAddress, formatRouteDistance, formatRouteDuration } from '@/services/routingService';
-import { createRide as createRideApi, joinRide as joinRideApi } from '@/services/api';
+import { fetchRouteOptions, routesOverlap, geocodeAddress, reverseGeocodeAddress, formatRouteDistance, formatRouteDuration } from '@/services/routingService';
+import { createRide as createRideApi, joinRide as joinRideApi, getRideById, updateRide as updateRideApi, type ApiLatLng } from '@/services/api';
 import { mapApiRideToRide, mapApiRidersToSessions } from '@/services/rideMapper';
 import { useGeolocation } from '@/hooks/useGeolocation';
+import RouteOptionsMap from '@/components/map/RouteOptionsMap';
 import type { LatLng } from '@/types';
 import type { RouteOption, GeocodingResult } from '@/services/routingService';
 
@@ -91,7 +92,30 @@ function LocationInput({ placeholder, value, onChange, onSelect, icon }: Locatio
   );
 }
 
+const endpointsKey = (a: LatLng, b: LatLng) => `${a.lat},${a.lng}|${b.lat},${b.lng}`;
+
+function routeLengthMeters(points: ApiLatLng[]): number {
+  let total = 0;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1], b = points[i];
+    const toRad = (d: number) => (d * Math.PI) / 180;
+    const h = Math.sin(toRad(b.lat - a.lat) / 2) ** 2
+      + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(toRad(b.lng - a.lng) / 2) ** 2;
+    total += 2 * 6371000 * Math.asin(Math.sqrt(h));
+  }
+  return total;
+}
+
 export default function CreateRidePage() {
+  const { id: editRideId } = useParams<{ id: string }>();
+  const isEdit = Boolean(editRideId);
+  const [loadingRide, setLoadingRide] = useState(isEdit);
+  const [loadError, setLoadError] = useState('');
+  const [saving, setSaving] = useState(false);
+  // The ride's saved route, offered as "Current route" while start/destination are unchanged.
+  const savedRouteRef = useRef<{ key: string; route: RouteOption } | null>(null);
+  const locationRequestedRef = useRef(false);
+  const lastRoutedKeyRef = useRef<string | null>(null);
   const [rideName, setRideName] = useState('');
   const [startAddr, setStartAddr] = useState('');
   const [destAddr, setDestAddr] = useState('');
@@ -110,12 +134,14 @@ export default function CreateRidePage() {
 
   // Handler to detect current location and set as start point
   const handleUseCurrentLocation = useCallback(() => {
+    locationRequestedRef.current = true;
     requestLocation();
   }, [requestLocation]);
 
   // Auto-update start location when geolocation is detected
   useEffect(() => {
-    if (currentLocation) {
+    // When editing, keep the saved start unless the leader taps the location button.
+    if (currentLocation && (!isEdit || locationRequestedRef.current)) {
       // Set the coordinates as start location
       setStartCoord(currentLocation);
       
@@ -133,7 +159,47 @@ export default function CreateRidePage() {
           setStartAddr(`${currentLocation.lat.toFixed(4)}, ${currentLocation.lng.toFixed(4)}`);
         });
     }
-  }, [currentLocation]);
+  }, [currentLocation, isEdit]);
+
+  useEffect(() => {
+    if (!editRideId) return;
+    let cancelled = false;
+    setLoadingRide(true);
+    getRideById(editRideId)
+      .then((ride) => {
+        if (cancelled) return;
+        if (ride.leaderId !== user?.id) {
+          setLoadError('Only the ride leader can edit this ride.');
+          return;
+        }
+        if (ride.status === 'COMPLETED') {
+          setLoadError('This ride is closed and can no longer be edited.');
+          return;
+        }
+        const current: RouteOption = {
+          distance: ride.distanceMeters ?? routeLengthMeters(ride.route),
+          duration: ride.durationSeconds ?? 0,
+          geometry: ride.route,
+          summary: 'Current route',
+        };
+        savedRouteRef.current = { key: endpointsKey(ride.startLocation, ride.destination), route: current };
+        lastRoutedKeyRef.current = savedRouteRef.current.key;
+        setRideName(ride.name);
+        setStartAddr(ride.startAddress);
+        setDestAddr(ride.destAddress);
+        setRoutes([current]);
+        setSelectedRoute(0);
+        setStartCoord(ride.startLocation);
+        setDestCoord(ride.destination);
+      })
+      .catch(() => {
+        if (!cancelled) setLoadError('Could not load this ride. Please try again.');
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingRide(false);
+      });
+    return () => { cancelled = true; };
+  }, [editRideId, user?.id]);
 
   // Fetch routes when both coordinates are set
   const handleFetchRoutes = useCallback(async () => {
@@ -143,7 +209,11 @@ export default function CreateRidePage() {
     setRoutes([]);
     setSelectedRoute(null);
     try {
-      const result = await fetchRoutes(startCoord, destCoord);
+      let result = await fetchRouteOptions(startCoord, destCoord, 3);
+      const saved = savedRouteRef.current;
+      if (saved && saved.key === endpointsKey(startCoord, destCoord)) {
+        result = [saved.route, ...result.filter((r) => !routesOverlap(r, saved.route) && !routesOverlap(saved.route, r))].slice(0, 3);
+      }
       setRoutes(result);
       if (result.length > 0) setSelectedRoute(0);
     } catch {
@@ -155,10 +225,39 @@ export default function CreateRidePage() {
 
   // Auto-fetch routes when both coords are set
   useEffect(() => {
-    if (startCoord && destCoord) {
-      handleFetchRoutes();
-    }
+    if (!startCoord || !destCoord) return;
+    const key = endpointsKey(startCoord, destCoord);
+    // Editing: the saved route is shown on load, so only re-route once an endpoint changes.
+    if (lastRoutedKeyRef.current === key) return;
+    lastRoutedKeyRef.current = key;
+    handleFetchRoutes();
   }, [startCoord, destCoord, handleFetchRoutes]);
+
+  const handleSave = useCallback(async () => {
+    if (!user || !editRideId || selectedRoute === null || !startCoord || !destCoord) return;
+    const chosen = routes[selectedRoute];
+    setSaving(true);
+    try {
+      const updated = await updateRideApi(editRideId, {
+        userId: user.id,
+        name: rideName.trim() || 'My Ride',
+        startLocation: startCoord,
+        destination: destCoord,
+        startAddress: startAddr || 'Start point',
+        destAddress: destAddr || 'Destination',
+        route: chosen.geometry,
+        distanceMeters: chosen.distance,
+        durationSeconds: chosen.duration,
+      });
+      hydrateRide(mapApiRideToRide(updated), mapApiRidersToSessions(updated));
+      navigate(`/ride/${updated.id}`);
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof Error ? `Failed to save changes: ${error.message}` : 'Failed to save changes.');
+    } finally {
+      setSaving(false);
+    }
+  }, [user, editRideId, selectedRoute, startCoord, destCoord, routes, rideName, startAddr, destAddr, hydrateRide, navigate]);
 
   const handleCreate = useCallback(async () => {
     if (!user || selectedRoute === null || !startCoord || !destCoord) return;
@@ -204,13 +303,43 @@ export default function CreateRidePage() {
     }
   }, [user, rideName, startAddr, destAddr, startCoord, destCoord, selectedRoute, routes, currentLocation, hydrateRide, navigate]);
 
+  const fastestDuration = routes.length ? Math.min(...routes.map((r) => r.duration)) : 0;
+  const shortestDistance = routes.length ? Math.min(...routes.map((r) => r.distance)) : 0;
+  const backTo = isEdit ? `/ride/${editRideId}` : '/dashboard';
+
+  if (isEdit && (loadingRide || loadError)) {
+    return (
+      <div className="min-h-screen bg-background p-6 max-w-lg mx-auto">
+        <button onClick={() => navigate(backTo)} className="flex items-center gap-2 text-muted-foreground hover:text-foreground mb-6 text-sm">
+          <ArrowLeft className="w-4 h-4" /> Back
+        </button>
+        {loadingRide ? (
+          <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground">
+            <Loader2 className="w-5 h-5 animate-spin" />
+            <span className="text-sm">Loading ride...</span>
+          </div>
+        ) : (
+          <div className="glass rounded-xl p-6 text-center">
+            <AlertCircle className="w-8 h-8 text-destructive mx-auto mb-2" />
+            <p className="text-sm text-foreground">{loadError}</p>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background p-6 max-w-lg mx-auto">
-      <button onClick={() => navigate('/dashboard')} className="flex items-center gap-2 text-muted-foreground hover:text-foreground mb-6 text-sm">
+      <button onClick={() => navigate(backTo)} className="flex items-center gap-2 text-muted-foreground hover:text-foreground mb-6 text-sm">
         <ArrowLeft className="w-4 h-4" /> Back
       </button>
 
-      <h1 className="text-xl font-bold text-foreground mb-6">Create a Ride</h1>
+      <h1 className="text-xl font-bold text-foreground mb-1">{isEdit ? 'Edit Ride' : 'Create a Ride'}</h1>
+      {isEdit ? (
+        <p className="text-xs text-muted-foreground mb-6">Riders keep the same ride code. Changes show up for everyone right away.</p>
+      ) : (
+        <div className="mb-5" />
+      )}
 
       <div className="space-y-4">
         <div className="glass-strong rounded-xl p-4 space-y-3">
@@ -296,6 +425,18 @@ export default function CreateRidePage() {
               <Route className="w-4 h-4" />
               {routes.length} route{routes.length > 1 ? 's' : ''} found
             </h2>
+            <div className="mb-3">
+              <RouteOptionsMap
+                routes={routes}
+                selectedIndex={selectedRoute}
+                onSelect={setSelectedRoute}
+                start={startCoord}
+                destination={destCoord}
+              />
+              {routes.length > 1 && (
+                <p className="text-xs text-muted-foreground mt-2">Tap a route on the map or below to choose it.</p>
+              )}
+            </div>
             <div className="space-y-2">
               {routes.map((route, i) => (
                 <button
@@ -311,9 +452,14 @@ export default function CreateRidePage() {
                         <h3 className="font-medium text-foreground text-sm truncate">
                           {route.summary || `Route ${i + 1}`}
                         </h3>
-                        {i === 0 && (
+                        {routes.length > 1 && route.duration === fastestDuration && (
                           <span className="text-[10px] bg-primary/20 text-primary px-1.5 py-0.5 rounded font-semibold shrink-0">
                             FASTEST
+                          </span>
+                        )}
+                        {routes.length > 1 && route.distance === shortestDistance && (
+                          <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded font-semibold shrink-0">
+                            SHORTEST
                           </span>
                         )}
                       </div>
@@ -324,9 +470,11 @@ export default function CreateRidePage() {
                         <span className="text-xs text-primary font-semibold">
                           {formatRouteDuration(route.duration)}
                         </span>
-                        <span className="text-xs text-muted-foreground">
-                          {route.geometry.length} points
-                        </span>
+                        {route.duration - fastestDuration >= 60 && (
+                          <span className="text-xs text-muted-foreground">
+                            +{Math.round((route.duration - fastestDuration) / 60)} min
+                          </span>
+                        )}
                       </div>
                     </div>
                     <div
@@ -351,13 +499,22 @@ export default function CreateRidePage() {
           </div>
         )}
 
+        {isEdit && routes.length === 1 && routes[0] === savedRouteRef.current?.route && !loadingRoutes && (
+          <button
+            onClick={handleFetchRoutes}
+            className="w-full rounded-xl border border-primary/40 bg-primary/10 text-primary text-sm font-semibold py-2.5 hover:bg-primary/20 transition-colors"
+          >
+            Show other route options
+          </button>
+        )}
+
         <Button
-          onClick={handleCreate}
-          disabled={selectedRoute === null || !startCoord || !destCoord}
+          onClick={isEdit ? handleSave : handleCreate}
+          disabled={selectedRoute === null || !startCoord || !destCoord || saving}
           className="w-full"
           size="lg"
         >
-          Create Ride
+          {isEdit ? (saving ? 'Saving...' : 'Save Changes') : 'Create Ride'}
         </Button>
       </div>
     </div>

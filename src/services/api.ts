@@ -24,6 +24,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(message);
   }
 
+  if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
 
@@ -63,6 +64,8 @@ export interface ApiRide {
     lastUpdate?: string;
     onRoute?: boolean;
     online?: boolean;
+    closed?: boolean;
+    left?: boolean;
     routeFollowed?: ApiLatLng[];
   }[];
 }
@@ -91,6 +94,26 @@ export async function createRide(payload: {
 }) {
   return request<ApiRide>("/rides", {
     method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateRide(
+  rideId: string,
+  payload: {
+    userId: string;
+    name: string;
+    startLocation: ApiLatLng;
+    destination: ApiLatLng;
+    startAddress: string;
+    destAddress: string;
+    route: ApiLatLng[];
+    distanceMeters: number;
+    durationSeconds: number;
+  }
+) {
+  return request<ApiRide>(`/rides/${encodeURIComponent(rideId)}`, {
+    method: "PUT",
     body: JSON.stringify(payload),
   });
 }
@@ -147,6 +170,28 @@ export async function updateRideStatus(
 
 export async function getRidesByUser(userId: string) {
   return request<ApiRide[]>(`/rides/user/${encodeURIComponent(userId)}`);
+}
+
+/** Closes the ride for one non-leader rider; it keeps going for everyone else. */
+export async function closeRideForRider(rideId: string, userId: string) {
+  return request<ApiRide>(
+    `/rides/${encodeURIComponent(rideId)}/riders/${encodeURIComponent(userId)}/close`,
+    { method: "POST" },
+  );
+}
+
+/** True when the whole ride is completed or this user has closed it for themselves. */
+export function isRideClosedFor(ride: ApiRide, userId?: string) {
+  return ride.status === "COMPLETED"
+    || !!ride.riders?.some((rider) => rider.userId === userId && rider.closed);
+}
+
+/** Removes a ride from this user's Recent Rides only. */
+export async function removeRideFromHistory(userId: string, rideId: string) {
+  return request<void>(
+    `/rides/user/${encodeURIComponent(userId)}/history/${encodeURIComponent(rideId)}`,
+    { method: "DELETE" }
+  );
 }
 
 export async function signup(payload: {

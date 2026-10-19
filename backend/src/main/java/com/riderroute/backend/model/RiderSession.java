@@ -15,6 +15,28 @@ public class RiderSession {
     private Instant lastUpdate;
     private boolean onRoute;
     private boolean online;
+    /** True once this rider has closed the ride for themselves; the ride continues for others. */
+    private boolean closed;
+    private Instant closedAt;
+    /** True once this rider removed the ride from their history; their location is no longer shared. */
+    private boolean left;
+
+    public boolean isLeft() {
+        return left;
+    }
+
+    public void setLeft(boolean left) {
+        this.left = left;
+    }
+
+    /** Clears every stored position so other riders can no longer see where this rider is. */
+    public void forgetLocation() {
+        this.location = null;
+        this.routeFollowed = new ArrayList<>();
+        this.online = false;
+        this.speed = 0;
+        this.heading = 0;
+    }
     private List<LatLng> routeFollowed = new ArrayList<>();
 
     public String getUserId() {
@@ -95,6 +117,22 @@ public class RiderSession {
 
     public void setOnline(boolean online) {
         this.online = online;
+    }
+
+    public boolean isClosed() {
+        return closed;
+    }
+
+    public void setClosed(boolean closed) {
+        this.closed = closed;
+    }
+
+    public Instant getClosedAt() {
+        return closedAt;
+    }
+
+    public void setClosedAt(Instant closedAt) {
+        this.closedAt = closedAt;
     }
 
     public List<LatLng> getRouteFollowed() {

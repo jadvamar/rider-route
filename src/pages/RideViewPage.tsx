@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Copy, Check, ChevronUp, ChevronDown, Play, Square, Share2, Clock, MapPin, Users, Navigation, RefreshCw, X } from 'lucide-react';
+import { ArrowLeft, Copy, Check, ChevronUp, ChevronDown, Play, Square, Share2, Clock, MapPin, Users, Navigation, RefreshCw, X, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useRideStore } from '@/store/useRideStore';
@@ -12,7 +12,7 @@ import { getDistance, isOnRoute } from '@/services/locationService';
 import { useGeolocation } from '@/hooks/useGeolocation';
 import { playSOSSound, playAlertSound } from '@/lib/soundNotification';
 import type { LatLng, RiderSession } from '@/types';
-import { getRideById, updateRideStatus, updateRiderLocation as updateRiderLocationApi, triggerSOS as triggerSOSApi, cancelSOS as cancelSOSApi } from '@/services/api';
+import { closeRideForRider, getRideById, updateRideStatus, updateRiderLocation as updateRiderLocationApi, triggerSOS as triggerSOSApi, cancelSOS as cancelSOSApi } from '@/services/api';
 import { mapApiRideToRide, mapApiRidersToSessions } from '@/services/rideMapper';
 import { getRemainingJourney } from '@/services/journeyService';
 import { fetchRoutes, formatRouteDistance, formatRouteDuration } from '@/services/routingService';
@@ -58,6 +58,8 @@ export default function RideViewPage() {
   // Compute derived state (must be before early returns)
   const isLoadingRide = !currentRide && id;
   const ridersArray = useMemo(() => Array.from(riders.values()), [riders]);
+  // Riders who closed or deleted the ride no longer share their location.
+  const liveRiders = useMemo(() => ridersArray.filter((rider) => !rider.hasLeft), [ridersArray]);
   const isLeader = currentRide?.leaderId === user?.id;
   const myLocation = riders.get(user?.id ?? '')?.location;
   const remainingJourney = useMemo(() =>
@@ -129,6 +131,9 @@ export default function RideViewPage() {
       try {
         const apiRide = await getRideById(id);
         if (cancelled) return;
+        if (user && apiRide.riders?.some((r) => r.userId === user.id && (r.closed || r.left))) {
+          setRideClosedByMe(true);
+        }
         const ride = mapApiRideToRide(apiRide);
         const mappedRiders = mapApiRidersToSessions(apiRide);
         const previousRiders = useRideStore.getState().riders;
@@ -136,6 +141,7 @@ export default function RideViewPage() {
         // Backend falls back to the ride start for riders without a reported position;
         // prefer this device's GPS for me and the last known position for everyone else.
         mappedRiders.forEach((rider) => {
+          if (rider.hasLeft) return;
           const reported = apiRide.riders?.find((r) => r.userId === rider.userId)?.location;
           if (rider.userId === user?.id && latestLocationRef.current) {
             rider.location = latestLocationRef.current;
@@ -387,9 +393,16 @@ export default function RideViewPage() {
     }
   };
 
-  const handleCloseRide = () => {
-    // Non-leader close ride from their view
-    setRideClosedByMe(true);
+  const handleCloseRide = async () => {
+    // Non-leader closes the ride only for themselves; it keeps going for everyone else.
+    if (!currentRide || !user) return;
+    try {
+      await closeRideForRider(currentRide.id, user.id);
+      setRideClosedByMe(true);
+    } catch (error) {
+      console.error(error);
+      alert('Failed to close ride. Please try again.');
+    }
   };
 
   // Early returns for authentication/loading states
@@ -440,9 +453,17 @@ export default function RideViewPage() {
           <button onClick={() => navigate('/dashboard')} className="text-muted-foreground hover:text-foreground">
             <ArrowLeft className="w-5 h-5" />
           </button>
-          <h1 className="text-xl font-bold text-foreground">Ride Completed ✓</h1>
+          <h1 className="text-xl font-bold text-foreground">
+            {currentRide.status === 'completed' ? 'Ride Completed ✓' : 'Ride Closed ✓'}
+          </h1>
           <div className="w-5" />
         </div>
+
+        {currentRide.status !== 'completed' && (
+          <p className="mb-4 rounded-lg border border-red-500/50 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+            You closed this ride. It continues for the other riders.
+          </p>
+        )}
 
         {/* Ride Summary Card */}
         <div className="glass rounded-xl p-6 mb-6">
@@ -486,7 +507,9 @@ export default function RideViewPage() {
                     {rider.isLeader ? '👑 Leader' : 'Rider'}
                   </p>
                 </div>
-                {rider.isOnRoute ? (
+                {rider.hasLeft ? (
+                  <span className="text-xs bg-red-500/20 text-red-400 px-2 py-1 rounded">Left ride</span>
+                ) : rider.isOnRoute ? (
                   <span className="text-xs bg-success/20 text-success px-2 py-1 rounded">On Route</span>
                 ) : (
                   <span className="text-xs bg-destructive/20 text-destructive px-2 py-1 rounded">Off Route</span>
@@ -520,12 +543,22 @@ export default function RideViewPage() {
           </button>
           <div className="flex-1 min-w-0">
             <h2 className="font-semibold text-sm text-foreground truncate">{currentRide.name}</h2>
-            <p className="text-xs text-muted-foreground">{ridersArray.length} riders</p>
+            <p className="text-xs text-muted-foreground">{liveRiders.length} riders</p>
           </div>
           <button onClick={handleCopyCode} className="flex items-center gap-1 text-xs bg-secondary/50 px-2.5 py-1.5 rounded-lg text-secondary-foreground font-mono">
             {currentRide.code}
             {copied ? <Check className="w-3 h-3 text-success" /> : <Copy className="w-3 h-3" />}
           </button>
+          {isLeader && (
+            <button
+              onClick={() => navigate(`/ride/${currentRide.id}/edit`)}
+              title="Edit ride"
+              aria-label="Edit ride"
+              className="w-8 h-8 shrink-0 rounded-lg bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center shadow"
+            >
+              <Pencil className="w-4 h-4" />
+            </button>
+          )}
           {isLeader && currentRide.status === 'waiting' && (
             <Button size="sm" onClick={handleStartRide} className="gap-1">
               <Play className="w-3 h-3" /> Start
@@ -556,7 +589,7 @@ export default function RideViewPage() {
       {/* Map */}
       <div className="flex-1">
         <RideMap
-          riders={ridersArray}
+          riders={liveRiders}
           myUserId={user.id}
           route={currentRide.route}
           center={currentRide.startLocation}
@@ -584,12 +617,25 @@ export default function RideViewPage() {
                   {rescueRoute.direct && <span className="text-gray-600"> (straight line)</span>}
                 </p>
               </div>
-              <Button size="sm" variant="outline" className="h-8 px-2 text-gray-900" onClick={handleRouteToSOS} disabled={rescueLoading} aria-label="Refresh route">
-                <RefreshCw className={`w-4 h-4 ${rescueLoading ? 'animate-spin' : ''}`} />
-              </Button>
-              <Button size="sm" variant="outline" className="h-8 px-2 text-gray-900" onClick={() => setRescueRoute(null)} aria-label="Clear route">
-                <X className="w-4 h-4" />
-              </Button>
+              <button
+                type="button"
+                className="h-9 w-9 shrink-0 rounded-full bg-blue-600 text-white shadow-md flex items-center justify-center hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 disabled:opacity-60"
+                onClick={handleRouteToSOS}
+                disabled={rescueLoading}
+                aria-label="Refresh route"
+                title="Refresh route"
+              >
+                <RefreshCw className={`w-4 h-4 ${rescueLoading ? 'animate-spin' : ''}`} strokeWidth={2.75} />
+              </button>
+              <button
+                type="button"
+                className="h-9 w-9 shrink-0 rounded-full bg-red-600 text-white shadow-md flex items-center justify-center hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300"
+                onClick={() => setRescueRoute(null)}
+                aria-label="Clear route"
+                title="Clear route"
+              >
+                <X className="w-4 h-4" strokeWidth={3} />
+              </button>
             </div>
           ) : (
             <div className="flex items-center gap-2">
@@ -689,7 +735,7 @@ export default function RideViewPage() {
           {remainingJourney && <p className="text-[10px] text-muted-foreground mt-1">Based on the selected route; not live traffic.</p>}
         </div>
         <div className="flex items-center justify-between px-4 pb-2">
-          <span className="text-sm font-semibold text-foreground">{ridersArray.length} Riders</span>
+          <span className="text-sm font-semibold text-foreground">{liveRiders.length} Riders</span>
           <button onClick={() => setPanelOpen(!panelOpen)} className="text-muted-foreground">
             {panelOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
           </button>
@@ -697,7 +743,7 @@ export default function RideViewPage() {
         {panelOpen && (
           <div className="px-4 pb-4 overflow-y-auto max-h-[45vh]">
             <RiderList
-              riders={ridersArray}
+              riders={liveRiders}
               myUserId={user.id}
               myLocation={myLocation}
               onSelectRider={() => {}}

@@ -5,12 +5,13 @@ import Dashboard from './Dashboard';
 import JoinRidePage from './JoinRidePage';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useRideStore } from '@/store/useRideStore';
-import { getRideByCode, getRidesByUser, joinRide, type ApiRide } from '@/services/api';
+import { getRideByCode, getRidesByUser, joinRide, removeRideFromHistory, type ApiRide } from '@/services/api';
 
 vi.mock('@/services/api', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/services/api')>(),
   getRideByCode: vi.fn(),
   getRidesByUser: vi.fn(),
+  removeRideFromHistory: vi.fn(),
   joinRide: vi.fn(),
 }));
 vi.mock('@/hooks/useGeolocation', () => ({
@@ -64,12 +65,125 @@ describe('ride details before joining', () => {
     expect(screen.getByText('Ongoing')).toHaveClass('text-green-500');
   });
 
+  it('shows only the leader name on recent ride cards', async () => {
+    vi.mocked(getRidesByUser).mockResolvedValue([{
+      ...ride,
+      riders: [
+        { userId: 'rider', userName: 'Rider', leader: false },
+        { userId: 'leader', userName: 'Asha', leader: true },
+        { userId: 'other', userName: 'Ravi', leader: false },
+      ],
+    }]);
+    render(<MemoryRouter><Dashboard /></MemoryRouter>);
+    expect(await screen.findByText('Leader: Asha')).toBeInTheDocument();
+    expect(screen.queryByText(/Riders:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Ravi/)).not.toBeInTheDocument();
+  });
+
   it('marks completed rides as closed in red on the home page', async () => {
     vi.mocked(getRidesByUser).mockResolvedValue([{ ...ride, id: 'done', name: 'Old trip', status: 'COMPLETED' }]);
     render(<MemoryRouter><Dashboard /></MemoryRouter>);
     expect(await screen.findByText('Old trip')).toBeInTheDocument();
     expect(screen.getByText('Closed')).toHaveClass('text-red-500');
     expect(screen.queryByText('Ongoing')).not.toBeInTheDocument();
+  });
+
+  it('shows Closed only for the rider who closed an ongoing ride', async () => {
+    const shared: ApiRide = {
+      ...ride,
+      status: 'ACTIVE',
+      riders: [
+        { userId: 'leader', userName: 'Leader', leader: true },
+        { userId: 'rider', userName: 'Rider', leader: false, closed: true },
+      ],
+    };
+    vi.mocked(getRidesByUser).mockResolvedValue([shared]);
+    render(<MemoryRouter><Dashboard /></MemoryRouter>);
+    expect(await screen.findByText('Closed')).toHaveClass('text-red-500');
+    cleanup();
+
+    useAuthStore.setState({ user: { id: 'leader', name: 'Leader', email: 'leader@example.com' } });
+    render(<MemoryRouter><Dashboard /></MemoryRouter>);
+    expect(await screen.findByText('Ongoing')).toHaveClass('text-green-500');
+  });
+
+  it('shows Edit only on the leader\'s own rides that are still ongoing', async () => {
+    useAuthStore.setState({ user: { id: 'leader', name: 'Leader', email: 'leader@example.com' } });
+    vi.mocked(getRidesByUser).mockResolvedValue([
+      ride,
+      { ...ride, id: 'done', name: 'Old trip', status: 'COMPLETED' },
+      { ...ride, id: 'joined', name: 'Friend trip', leaderId: 'friend' },
+    ]);
+    render(
+      <MemoryRouter initialEntries={['/dashboard']}>
+        <Routes>
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/ride/:id/edit" element={<p>Edit page</p>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await screen.findByText('Friend trip');
+    const editButtons = screen.getAllByRole('button', { name: /Edit/ });
+    expect(editButtons).toHaveLength(1);
+    fireEvent.click(editButtons[0]);
+    expect(await screen.findByText('Edit page')).toBeInTheDocument();
+  });
+
+  it('deletes a ride from my history only after confirming', async () => {
+    vi.mocked(getRidesByUser).mockResolvedValue([ride, { ...ride, id: 'other', name: 'Other trip' }]);
+    vi.mocked(removeRideFromHistory).mockResolvedValue(undefined);
+    render(<MemoryRouter><Dashboard /></MemoryRouter>);
+    await screen.findByText('Weekend trip');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Weekend trip from history' }));
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Want to delete ride?');
+    expect(screen.getByText('It is only removed from your history. Other riders keep it.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(removeRideFromHistory).not.toHaveBeenCalled();
+    expect(screen.getByText('Weekend trip')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Weekend trip from history' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, delete' }));
+
+    await waitFor(() => expect(screen.queryByText('Weekend trip')).not.toBeInTheDocument());
+    expect(removeRideFromHistory).toHaveBeenCalledWith('rider', 'ride');
+    expect(screen.getByText('Other trip')).toBeInTheDocument();
+  });
+
+  it('opens a ride by tapping its card, and the corner X does not open it', async () => {
+    vi.mocked(getRidesByUser).mockResolvedValue([ride]);
+    render(
+      <MemoryRouter initialEntries={['/dashboard']}>
+        <Routes>
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/ride/:id" element={<p>Ride screen</p>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await screen.findByText('Weekend trip');
+    expect(screen.queryByRole('button', { name: 'Open' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Weekend trip from history' }));
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+    expect(screen.queryByText('Ride screen')).not.toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Weekend trip'));
+    expect(await screen.findByText('Ride screen')).toBeInTheDocument();
+  });
+
+  it('keeps the ride listed and explains when delete fails', async () => {
+    vi.mocked(getRidesByUser).mockResolvedValue([ride]);
+    vi.mocked(removeRideFromHistory).mockRejectedValue(new Error('offline'));
+    render(<MemoryRouter><Dashboard /></MemoryRouter>);
+    await screen.findByText('Weekend trip');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Weekend trip from history' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, delete' }));
+
+    expect(await screen.findByText('Could not delete this ride. Please try again.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open Weekend trip' })).toBeInTheDocument();
   });
 
   it('loads details without joining, then joins only on confirmation', async () => {

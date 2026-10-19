@@ -44,6 +44,8 @@ export interface RiderSession {
   isOnRoute: boolean;
   isOnline: boolean;
   routeFollowed: LatLng[];
+  /** Closed the ride or removed it from history: location is no longer shared. */
+  hasLeft?: boolean;
 }
 
 export interface RiderDistance {

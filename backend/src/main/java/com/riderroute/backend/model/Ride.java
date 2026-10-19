@@ -1,11 +1,14 @@
 package com.riderroute.backend.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 @Document(collection = "rides")
 public class Ride {
@@ -42,6 +45,17 @@ public class Ride {
     private Instant createdAt = Instant.now();
     private List<RiderSession> riders = new ArrayList<>();
     private SOSAlert activeSOS;
+    /** Users who removed this ride from their own Recent Rides; it stays visible to everyone else. */
+    private Set<String> hiddenFor = new HashSet<>();
+
+    @JsonIgnore
+    public Set<String> getHiddenFor() {
+        return hiddenFor;
+    }
+
+    public void setHiddenFor(Set<String> hiddenFor) {
+        this.hiddenFor = hiddenFor;
+    }
 
     public String getId() {
         return id;

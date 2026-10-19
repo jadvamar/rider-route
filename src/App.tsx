@@ -40,6 +40,7 @@ const App = () => {
             <Route path="/create" element={<ProtectedRoute><CreateRidePage /></ProtectedRoute>} />
             <Route path="/join/:code" element={<ProtectedRoute><JoinRidePage /></ProtectedRoute>} />
             <Route path="/ride/:id" element={<ProtectedRoute><RideViewPage /></ProtectedRoute>} />
+            <Route path="/ride/:id/edit" element={<ProtectedRoute><CreateRidePage /></ProtectedRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

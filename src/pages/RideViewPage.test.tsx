@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import RideViewPage from './RideViewPage';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useRideStore } from '@/store/useRideStore';
-import { cancelSOS, getRideById, updateRiderLocation, type ApiRide } from '@/services/api';
+import { cancelSOS, closeRideForRider, getRideById, updateRiderLocation, type ApiRide } from '@/services/api';
 import { playSOSSound } from '@/lib/soundNotification';
 import { fetchRoutes } from '@/services/routingService';
 
@@ -33,6 +33,7 @@ vi.mock('@/services/api', async (importOriginal) => ({
   updateRiderLocation: vi.fn().mockResolvedValue({}),
   triggerSOS: vi.fn(),
   cancelSOS: vi.fn(),
+  closeRideForRider: vi.fn(),
 }));
 
 const makeRide = (): ApiRide => ({
@@ -261,5 +262,77 @@ describe('received SOS notifications', () => {
     await openRide();
     expect(screen.queryByRole('button', { name: /Route/ })).not.toBeInTheDocument();
     expect(screen.queryByTestId('rescue-route-bar')).not.toBeInTheDocument();
+  });
+});
+
+describe('non-leader closing a ride', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    gps.location = { lat: 12, lng: 77 };
+    useRideStore.getState().leaveRide();
+    useAuthStore.setState({
+      user: { id: 'receiver', name: 'Receiver', email: 'receiver@example.com' },
+      isAuthenticated: true,
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it('saves the close for this rider and shows it as closed', async () => {
+    const ride = { ...makeRide(), activeSOS: undefined };
+    vi.mocked(getRideById).mockResolvedValue(ride);
+    vi.mocked(closeRideForRider).mockResolvedValue(ride);
+    await openRide();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Close Ride/ }));
+    });
+
+    expect(closeRideForRider).toHaveBeenCalledWith('ride-1', 'receiver');
+    expect(screen.getByText(/^Ride Closed/)).toBeInTheDocument();
+    expect(screen.getByText('You closed this ride. It continues for the other riders.')).toBeInTheDocument();
+  });
+
+  it('hides riders who closed or deleted the ride from the live map but keeps their name on the closed screen', async () => {
+    const ride = makeRide();
+    vi.mocked(getRideById).mockResolvedValue({
+      ...ride,
+      activeSOS: undefined,
+      riders: [
+        ride.riders![0],
+        { ...ride.riders![1], location: { lat: 12.5, lng: 77.5 } },
+        { userId: 'gone', userName: 'Gone Rider', leader: false, left: true },
+      ],
+    });
+    vi.mocked(closeRideForRider).mockResolvedValue(ride);
+    await openRide();
+
+    const mapRiders = (mapProps.last as unknown as { riders: { userId: string }[] }).riders.map((r) => r.userId);
+    expect(mapRiders).toContain('sender');
+    expect(mapRiders).not.toContain('gone');
+    expect(screen.getByText('2 riders')).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Close Ride/ }));
+    });
+    expect(screen.getByText('Gone Rider')).toBeInTheDocument();
+    expect(screen.getByText('Left ride')).toBeInTheDocument();
+  });
+
+  it('stays closed after reopening when the backend says this rider closed it', async () => {
+    const ride = makeRide();
+    vi.mocked(getRideById).mockResolvedValue({
+      ...ride,
+      activeSOS: undefined,
+      riders: [{ ...ride.riders![0], closed: true }, ride.riders![1]],
+    });
+    await openRide();
+
+    expect(screen.getByText(/^Ride Closed/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Close Ride/ })).not.toBeInTheDocument();
   });
 });

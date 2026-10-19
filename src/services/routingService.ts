@@ -44,9 +44,11 @@ function decodePolyline(encoded: string): LatLng[] {
   return points;
 }
 
-// Fetch turn-by-turn routes from OSRM
-export async function fetchRoutes(start: LatLng, end: LatLng): Promise<RouteOption[]> {
-  const url = `${OSRM_BASE}/route/v1/driving/${start.lng},${start.lat};${end.lng},${end.lat}?alternatives=true&overview=full&geometries=polyline&steps=true`;
+// Fetch turn-by-turn routes from OSRM, optionally forced through via points
+export async function fetchRoutes(start: LatLng, end: LatLng, via: LatLng[] = []): Promise<RouteOption[]> {
+  const coords = [start, ...via, end].map((p) => `${p.lng},${p.lat}`).join(';');
+  const alternatives = via.length === 0 ? '3' : 'false';
+  const url = `${OSRM_BASE}/route/v1/driving/${coords}?alternatives=${alternatives}&overview=full&geometries=polyline&steps=true`;
 
   const res = await fetch(url);
   if (!res.ok) throw new Error('Failed to fetch route');
@@ -56,12 +58,92 @@ export async function fetchRoutes(start: LatLng, end: LatLng): Promise<RouteOpti
     throw new Error('No routes found');
   }
 
-  return data.routes.map((route: { distance: number; duration: number; geometry: string; legs: { summary: string }[] }) => ({
-    distance: route.distance,
-    duration: route.duration,
-    geometry: decodePolyline(route.geometry),
-    summary: route.legs?.[0]?.summary || 'Route',
-  }));
+  return data.routes.map((route: { distance: number; duration: number; geometry: string; legs?: { summary: string }[] }) => {
+    const names = [...new Set((route.legs || []).flatMap((leg) => leg.summary.split(',')).map((s) => s.trim()).filter(Boolean))];
+    return {
+      distance: route.distance,
+      duration: route.duration,
+      geometry: decodePolyline(route.geometry),
+      summary: names.slice(0, 2).join(', ') || 'Route',
+    };
+  });
+}
+
+function metersBetween(a: LatLng, b: LatLng): number {
+  const R = 6371000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function distanceToSegment(p: LatLng, a: LatLng, b: LatLng): number {
+  // Local flat projection in metres around p is accurate enough at road scale.
+  const mPerLat = 111320;
+  const mPerLng = 111320 * Math.cos((p.lat * Math.PI) / 180);
+  const ax = (a.lng - p.lng) * mPerLng, ay = (a.lat - p.lat) * mPerLat;
+  const bx = (b.lng - p.lng) * mPerLng, by = (b.lat - p.lat) * mPerLat;
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2));
+  return Math.hypot(ax + t * dx, ay + t * dy);
+}
+function samplePoints(points: LatLng[], count: number): LatLng[] {
+  if (points.length <= count) return points;
+  const step = (points.length - 1) / (count - 1);
+  return Array.from({ length: count }, (_, i) => points[Math.round(i * step)]);
+}
+
+// Two routes are treated as the same if most of one lies on top of the other.
+export function routesOverlap(a: RouteOption, b: RouteOption, toleranceMeters = 80, threshold = 0.85): boolean {
+  const probe = samplePoints(a.geometry, 40);
+  const target = samplePoints(b.geometry, 400);
+  if (probe.length === 0 || target.length === 0) return false;
+  const near = (p: LatLng) =>
+    target.length === 1
+      ? metersBetween(p, target[0]) <= toleranceMeters
+      : target.slice(1).some((q, i) => distanceToSegment(p, target[i], q) <= toleranceMeters);
+  const close = probe.filter(near).length;
+  return close / probe.length >= threshold;
+}
+
+// Points beside the midpoint of the straight line, used to coax out genuinely different roads.
+export function detourViaPoints(start: LatLng, end: LatLng, factors = [0.25, -0.25]): LatLng[] {
+  const midLat = (start.lat + end.lat) / 2;
+  const midLng = (start.lng + end.lng) / 2;
+  const cos = Math.cos((midLat * Math.PI) / 180) || 1;
+  const dx = (end.lng - start.lng) * cos;
+  const dy = end.lat - start.lat;
+  return factors.map((f) => ({ lat: midLat + dx * f, lng: midLng + (-dy * f) / cos }));
+}
+
+/**
+ * Up to `max` distinct route choices, fastest first, similar to a map app's
+ * "suggested routes". Detours are only kept if they are not unreasonably long.
+ */
+export async function fetchRouteOptions(start: LatLng, end: LatLng, max = 3): Promise<RouteOption[]> {
+  const options: RouteOption[] = [];
+  const addIfDistinct = (route: RouteOption) => {
+    if (options.length >= max) return;
+    if (options.some((o) => routesOverlap(route, o) || routesOverlap(o, route))) return;
+    options.push(route);
+  };
+
+  (await fetchRoutes(start, end)).forEach(addIfDistinct);
+
+  if (options.length < max) {
+    const best = options[0];
+    const vias = detourViaPoints(start, end, [0.08, -0.08, 0.15, -0.15, 0.25, -0.25]);
+    const detours = await Promise.allSettled(vias.map((via) => fetchRoutes(start, end, [via])));
+    detours
+      .flatMap((result) => (result.status === 'fulfilled' ? result.value.slice(0, 1) : []))
+      .filter((route) => route.duration <= best.duration * 1.5 && route.distance <= best.distance * 1.5)
+      .sort((a, b) => a.duration - b.duration)
+      .forEach(addIfDistinct);
+  }
+
+  return options.sort((a, b) => a.duration - b.duration);
 }
 
 // Geocode an address to coordinates using Nominatim

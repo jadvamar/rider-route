@@ -3,6 +3,7 @@ package com.riderroute.backend.service;
 import com.riderroute.backend.dto.CreateRideRequest;
 import com.riderroute.backend.dto.JoinRideRequest;
 import com.riderroute.backend.dto.LocationUpdateRequest;
+import com.riderroute.backend.dto.UpdateRideRequest;
 import com.riderroute.backend.model.Ride;
 import com.riderroute.backend.model.RideStatus;
 import com.riderroute.backend.model.RiderSession;
@@ -11,7 +12,9 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -40,6 +43,25 @@ public class RideService {
         return rideRepository.save(ride);
     }
 
+    public Ride updateRide(String rideId, UpdateRideRequest request) {
+        Ride ride = getRideById(rideId);
+        if (!request.getUserId().equals(ride.getLeaderId())) {
+            throw new SecurityException("Only the ride leader can edit this ride");
+        }
+        if (ride.getStatus() == RideStatus.COMPLETED) {
+            throw new IllegalArgumentException("Completed rides cannot be edited");
+        }
+        ride.setName(request.getName());
+        ride.setStartLocation(request.getStartLocation());
+        ride.setDestination(request.getDestination());
+        ride.setStartAddress(request.getStartAddress());
+        ride.setDestAddress(request.getDestAddress());
+        ride.setRoute(request.getRoute());
+        ride.setDistanceMeters(request.getDistanceMeters());
+        ride.setDurationSeconds(request.getDurationSeconds());
+        return rideRepository.save(ride);
+    }
+
     public Ride getRideById(String rideId) {
         return rideRepository.findById(rideId).orElseThrow(() -> new IllegalArgumentException("Ride not found"));
     }
@@ -54,19 +76,58 @@ public class RideService {
 
     public List<Ride> listRidesByUser(String userId) {
         return rideRepository.findAll().stream()
+                .filter(ride -> ride.getHiddenFor() == null || !ride.getHiddenFor().contains(userId))
                 .filter(ride -> userId.equals(ride.getLeaderId())
                         || ride.getRiders().stream().anyMatch(rider -> userId.equals(rider.getUserId())))
                 .toList();
     }
 
+    /**
+     * Removes the ride from this user's history only. Once every member (leader and all
+     * riders) has removed it, nobody can see it any more, so the ride is deleted for good.
+     */
+    public void hideRideForUser(String rideId, String userId) {
+        Ride ride = getRideById(rideId);
+        Set<String> members = new HashSet<>();
+        if (ride.getLeaderId() != null) {
+            members.add(ride.getLeaderId());
+        }
+        ride.getRiders().forEach(rider -> members.add(rider.getUserId()));
+        if (!members.contains(userId)) {
+            throw new IllegalArgumentException("Ride not found in your history");
+        }
+        Set<String> hidden = ride.getHiddenFor() == null ? new HashSet<>() : new HashSet<>(ride.getHiddenFor());
+        hidden.add(userId);
+        if (hidden.containsAll(members)) {
+            rideRepository.delete(ride);
+            return;
+        }
+        ride.getRiders().stream()
+                .filter(rider -> userId.equals(rider.getUserId()))
+                .forEach(rider -> {
+                    rider.setLeft(true);
+                    rider.forgetLocation();
+                });
+        ride.setHiddenFor(hidden);
+        rideRepository.save(ride);
+    }
+
     public Ride joinRide(String rideId, JoinRideRequest request) {
         Ride ride = getRideById(rideId);
+        // Re-joining a ride brings it back into this rider's history.
+        if (ride.getHiddenFor() != null && ride.getHiddenFor().contains(request.getUserId())) {
+            Set<String> hidden = new HashSet<>(ride.getHiddenFor());
+            hidden.remove(request.getUserId());
+            ride.setHiddenFor(hidden);
+        }
         RiderSession existing = ride.getRiders().stream()
                 .filter(r -> r.getUserId().equals(request.getUserId()))
                 .findFirst()
                 .orElse(null);
         if (existing != null) {
-            if (request.getLocation() != null) {
+            // Re-joining after removing the ride from history starts sharing location again.
+            existing.setLeft(false);
+            if (request.getLocation() != null && !existing.isClosed()) {
                 existing.setLocation(request.getLocation());
                 existing.setOnline(true);
                 existing.setLastUpdate(Instant.now());
@@ -93,6 +154,9 @@ public class RideService {
                 .filter(r -> r.getUserId().equals(userId))
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("Rider not found in ride"));
+        if (rider.isClosed() || rider.isLeft()) {
+            return ride;
+        }
 
         rider.setLocation(request.getLocation());
         rider.setHeading(request.getHeading());
@@ -110,6 +174,25 @@ public class RideService {
         rider.setRouteFollowed(trail);
 
         return rideRepository.save(ride);
+    }
+
+    /** Closes the ride for one non-leader rider only; the ride keeps going for everyone else. */
+    public Ride closeRideForRider(String rideId, String userId) {
+        Ride ride = getRideById(rideId);
+        if (userId.equals(ride.getLeaderId())) {
+            throw new IllegalArgumentException("The leader ends the ride for everyone instead");
+        }
+        RiderSession rider = ride.getRiders().stream()
+                .filter(r -> userId.equals(r.getUserId()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Rider not found in ride"));
+        if (!rider.isClosed()) {
+            rider.setClosed(true);
+            rider.setClosedAt(Instant.now());
+            rider.forgetLocation();
+            ride = rideRepository.save(ride);
+        }
+        return ride;
     }
 
     public Ride updateRideStatus(String rideId, RideStatus status) {
