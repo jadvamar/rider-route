@@ -1,9 +1,18 @@
 import { create } from 'zustand';
 import type { User } from '@/types';
+import {
+  clearAuthToken,
+  login as loginApi,
+  me as meApi,
+  setAuthToken,
+  signup as signupApi,
+} from '@/services/api';
 
 interface AuthState {
   user: User | null;
   isAuthenticated: boolean;
+  initialized: boolean;
+  initializeAuth: () => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   signup: (name: string, email: string, password: string) => Promise<void>;
   logout: () => void;
@@ -12,29 +21,32 @@ interface AuthState {
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
   isAuthenticated: false,
+  initialized: false,
 
-  login: async (email: string, _password: string) => {
-    // Mock login — replace with real API
-    await new Promise((r) => setTimeout(r, 500));
-    const user: User = {
-      id: crypto.randomUUID(),
-      name: email.split('@')[0],
-      email,
-    };
-    set({ user, isAuthenticated: true });
+  initializeAuth: async () => {
+    try {
+      const user = await meApi();
+      set({ user, isAuthenticated: true, initialized: true });
+    } catch {
+      clearAuthToken();
+      set({ user: null, isAuthenticated: false, initialized: true });
+    }
   },
 
-  signup: async (name: string, email: string, _password: string) => {
-    await new Promise((r) => setTimeout(r, 500));
-    const user: User = {
-      id: crypto.randomUUID(),
-      name,
-      email,
-    };
-    set({ user, isAuthenticated: true });
+  login: async (email: string, password: string) => {
+    const response = await loginApi({ email, password });
+    setAuthToken(response.token);
+    set({ user: response.user, isAuthenticated: true, initialized: true });
+  },
+
+  signup: async (name: string, email: string, password: string) => {
+    const response = await signupApi({ name, email, password });
+    setAuthToken(response.token);
+    set({ user: response.user, isAuthenticated: true, initialized: true });
   },
 
   logout: () => {
-    set({ user: null, isAuthenticated: false });
+    clearAuthToken();
+    set({ user: null, isAuthenticated: false, initialized: true });
   },
 }));

@@ -87,6 +87,19 @@ export async function geocodeAddress(query: string): Promise<GeocodingResult[]> 
   }));
 }
 
+// Reverse geocode coordinates to address using Nominatim
+export async function reverseGeocodeAddress(coords: LatLng): Promise<string> {
+  const url = `${NOMINATIM_BASE}/reverse?format=json&lat=${coords.lat}&lon=${coords.lng}`;
+
+  const res = await fetch(url, {
+    headers: { 'User-Agent': 'RideTrackApp/1.0' },
+  });
+  if (!res.ok) throw new Error('Reverse geocoding failed');
+
+  const data = await res.json();
+  return data.display_name || `${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)}`;
+}
+
 // Format distance for display
 export function formatRouteDistance(meters: number): string {
   if (meters < 1000) return `${Math.round(meters)} m`;

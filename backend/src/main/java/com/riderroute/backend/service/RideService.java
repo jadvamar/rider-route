@@ -31,6 +31,8 @@ public class RideService {
         ride.setStartAddress(request.getStartAddress());
         ride.setDestAddress(request.getDestAddress());
         ride.setRoute(request.getRoute());
+        ride.setDistanceMeters(request.getDistanceMeters());
+        ride.setDurationSeconds(request.getDurationSeconds());
         ride.setStatus(RideStatus.WAITING);
         ride.setCreatedAt(Instant.now());
         ride.setCode(generateCode());
@@ -47,6 +49,13 @@ public class RideService {
 
     public List<Ride> listRides() {
         return rideRepository.findAll();
+    }
+
+    public List<Ride> listRidesByUser(String userId) {
+        return rideRepository.findAll().stream()
+                .filter(ride -> userId.equals(ride.getLeaderId())
+                        || ride.getRiders().stream().anyMatch(rider -> userId.equals(rider.getUserId())))
+                .toList();
     }
 
     public Ride joinRide(String rideId, JoinRideRequest request) {
@@ -92,6 +101,22 @@ public class RideService {
         Ride ride = getRideById(rideId);
         ride.setStatus(status);
         return rideRepository.save(ride);
+    }
+
+    public Ride triggerSOS(String rideId, String userId, String userName, com.riderroute.backend.model.LatLng location) {
+        Ride ride = getRideById(rideId);
+        ride.setActiveSOS(new com.riderroute.backend.model.SOSAlert(userId, userName, location, System.currentTimeMillis()));
+        return rideRepository.save(ride);
+    }
+
+    public Ride cancelSOS(String rideId, String userId) {
+        Ride ride = getRideById(rideId);
+        // Only allow the user who triggered SOS to cancel it
+        if (ride.getActiveSOS() != null && ride.getActiveSOS().getUserId().equals(userId)) {
+            ride.setActiveSOS(null);
+            return rideRepository.save(ride);
+        }
+        return ride;
     }
 
     private String generateCode() {

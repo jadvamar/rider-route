@@ -3,7 +3,9 @@ import { useAuthStore } from '@/store/useAuthStore';
 import AuthPage from './AuthPage';
 
 const Index = () => {
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, initialized } = useAuthStore();
+
+  if (!initialized) return null;
 
   if (isAuthenticated) {
     return <Navigate to="/dashboard" replace />;

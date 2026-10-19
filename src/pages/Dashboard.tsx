@@ -1,16 +1,34 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, LogIn, LogOut, MapPin, Clock, History } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useAuthStore } from '@/store/useAuthStore';
-import { useRideStore } from '@/store/useRideStore';
+import { getRidesByUser, type ApiRide } from '@/services/api';
+import { JourneySummary } from '@/components/ride/JourneySummary';
 
 export default function Dashboard() {
   const { user, logout } = useAuthStore();
-  const { rideHistory } = useRideStore();
   const [joinCode, setJoinCode] = useState('');
+  const [rideHistory, setRideHistory] = useState<ApiRide[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!user) return;
+    setLoadingHistory(true);
+    getRidesByUser(user.id)
+      .then((rides) => {
+        const sorted = [...rides].sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+        setRideHistory(sorted);
+      })
+      .catch(() => {
+        setRideHistory([]);
+      })
+      .finally(() => setLoadingHistory(false));
+  }, [user]);
 
   const handleJoin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -68,7 +86,7 @@ export default function Dashboard() {
           className="bg-background/50 border-border/50 font-mono tracking-widest text-center"
         />
         <Button type="submit" disabled={joinCode.length < 4}>
-          Join
+          Preview
         </Button>
       </form>
 
@@ -77,7 +95,11 @@ export default function Dashboard() {
         <h2 className="text-sm font-semibold text-muted-foreground flex items-center gap-2 mb-3">
           <History className="w-4 h-4" /> Recent Rides
         </h2>
-        {rideHistory.length === 0 ? (
+        {loadingHistory ? (
+          <div className="glass rounded-xl p-6 text-center">
+            <p className="text-sm text-muted-foreground">Loading recent rides...</p>
+          </div>
+        ) : rideHistory.length === 0 ? (
           <div className="glass rounded-xl p-6 text-center">
             <MapPin className="w-8 h-8 text-muted-foreground/30 mx-auto mb-2" />
             <p className="text-sm text-muted-foreground">No rides yet</p>
@@ -92,9 +114,16 @@ export default function Dashboard() {
                   <p className="text-sm font-medium text-foreground truncate">{ride.name}</p>
                   <p className="text-xs text-muted-foreground flex items-center gap-1">
                     <Clock className="w-3 h-3" />
-                    {new Date(ride.createdAt).toLocaleDateString()}
+                    {new Date(ride.createdAt).toLocaleDateString()} · {ride.startAddress} → {ride.destAddress}
                   </p>
+                  <p className="text-xs text-muted-foreground truncate">
+                    Riders: {(ride.riders || []).map((r) => r.userName).join(', ') || 'None'}
+                  </p>
+                  <JourneySummary ride={ride} />
                 </div>
+                <Button size="sm" variant="outline" onClick={() => navigate(`/ride/${ride.id}`)}>
+                  Open
+                </Button>
               </div>
             ))}
           </div>

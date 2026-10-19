@@ -1,42 +1,67 @@
-import { useState } from 'react';
-import { AlertTriangle, Phone } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { AlertTriangle, Phone, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type { Alert } from '@/types';
 
 interface SOSButtonProps {
   onTrigger: () => void;
+  onCancel?: () => void;
   disabled?: boolean;
+  isActive?: boolean;
 }
 
-export function SOSButton({ onTrigger, disabled }: SOSButtonProps) {
+export function SOSButton({ onTrigger, onCancel, disabled, isActive }: SOSButtonProps) {
   const [confirming, setConfirming] = useState(false);
 
   const handleClick = () => {
-    if (confirming) {
-      onTrigger();
-      setConfirming(false);
+    if (isActive) {
+      // If SOS is active, show cancel confirmation
+      if (confirming) {
+        onCancel?.();
+        setConfirming(false);
+      } else {
+        setConfirming(true);
+        setTimeout(() => setConfirming(false), 3000);
+      }
     } else {
-      setConfirming(true);
-      setTimeout(() => setConfirming(false), 3000);
+      // Normal SOS flow
+      if (confirming) {
+        onTrigger();
+        setConfirming(false);
+      } else {
+        setConfirming(true);
+        setTimeout(() => setConfirming(false), 3000);
+      }
     }
   };
 
   return (
-    <button
-      onClick={handleClick}
-      disabled={disabled}
-      className={`
-        w-16 h-16 rounded-full flex items-center justify-center font-bold text-sm
-        transition-all duration-200
-        ${confirming
-          ? 'bg-destructive text-destructive-foreground sos-pulse glow-danger'
-          : 'bg-destructive/20 text-destructive border-2 border-destructive/50 hover:bg-destructive hover:text-destructive-foreground'
-        }
-        disabled:opacity-50 disabled:cursor-not-allowed
-      `}
-    >
-      {confirming ? 'CONFIRM' : 'SOS'}
-    </button>
+    <div className="flex flex-col items-center gap-2">
+      <button
+        onClick={handleClick}
+        disabled={disabled}
+        className={`
+          w-16 h-16 rounded-full flex items-center justify-center font-bold text-sm
+          transition-all duration-200
+          ${isActive
+            ? confirming
+              ? 'bg-orange-500 text-orange-foreground glow-orange'
+              : 'bg-destructive text-destructive-foreground sos-pulse glow-danger'
+            : confirming
+              ? 'bg-destructive text-destructive-foreground sos-pulse glow-danger'
+              : 'bg-destructive/20 text-destructive border-2 border-destructive/50 hover:bg-destructive hover:text-destructive-foreground'
+          }
+          disabled:opacity-50 disabled:cursor-not-allowed
+        `}
+      >
+        {isActive ? (confirming ? 'CANCEL?' : 'ACTIVE') : (confirming ? 'CONFIRM' : 'SOS')}
+      </button>
+      {isActive && (
+        <div className="text-xs text-destructive bg-destructive/10 px-3 py-1 rounded-full animate-pulse">
+          SOS ALERT ACTIVE
+        </div>
+      )}
+    </div>
   );
 }
 

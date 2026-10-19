@@ -1,12 +1,14 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, MapPin, Navigation, Search, Loader2, Route } from 'lucide-react';
+import { ArrowLeft, MapPin, Navigation, Search, Loader2, Route, Crosshair, AlertCircle, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useRideStore } from '@/store/useRideStore';
-import { generateRideCode } from '@/services/locationService';
-import { fetchRoutes, geocodeAddress, formatRouteDistance, formatRouteDuration } from '@/services/routingService';
+import { fetchRoutes, geocodeAddress, reverseGeocodeAddress, formatRouteDistance, formatRouteDuration } from '@/services/routingService';
+import { createRide as createRideApi, joinRide as joinRideApi } from '@/services/api';
+import { mapApiRideToRide, mapApiRidersToSessions } from '@/services/rideMapper';
+import { useGeolocation } from '@/hooks/useGeolocation';
 import type { LatLng } from '@/types';
 import type { RouteOption, GeocodingResult } from '@/services/routingService';
 
@@ -100,8 +102,38 @@ export default function CreateRidePage() {
   const [loadingRoutes, setLoadingRoutes] = useState(false);
   const [routeError, setRouteError] = useState('');
   const { user } = useAuthStore();
-  const { createRide, addRider } = useRideStore();
+  const { hydrateRide } = useRideStore();
   const navigate = useNavigate();
+  
+  // Geolocation hook
+  const { location: currentLocation, error: geoError, loading: geoLoading, requestLocation } = useGeolocation();
+
+  // Handler to detect current location and set as start point
+  const handleUseCurrentLocation = useCallback(() => {
+    requestLocation();
+  }, [requestLocation]);
+
+  // Auto-update start location when geolocation is detected
+  useEffect(() => {
+    if (currentLocation) {
+      // Set the coordinates as start location
+      setStartCoord(currentLocation);
+      
+      // Reverse geocode to get the address
+      reverseGeocodeAddress(currentLocation)
+        .then((address) => {
+          // Use only the main address parts (first 2 parts)
+          const addressParts = address.split(',');
+          const shortAddress = addressParts.slice(0, 2).join(',').trim();
+          setStartAddr(shortAddress);
+        })
+        .catch((err) => {
+          console.error('Failed to reverse geocode:', err);
+          // Fallback to coordinates if reverse geocoding fails
+          setStartAddr(`${currentLocation.lat.toFixed(4)}, ${currentLocation.lng.toFixed(4)}`);
+        });
+    }
+  }, [currentLocation]);
 
   // Fetch routes when both coordinates are set
   const handleFetchRoutes = useCallback(async () => {
@@ -128,38 +160,48 @@ export default function CreateRidePage() {
     }
   }, [startCoord, destCoord, handleFetchRoutes]);
 
-  const handleCreate = useCallback(() => {
+  const handleCreate = useCallback(async () => {
     if (!user || selectedRoute === null || !startCoord || !destCoord) return;
     const chosen = routes[selectedRoute];
-    const code = generateRideCode();
-    const ride = {
-      id: crypto.randomUUID(),
-      name: rideName || chosen.summary || 'My Ride',
-      code,
-      leaderId: user.id,
-      startLocation: startCoord,
-      destination: destCoord,
-      startAddress: startAddr || 'Start point',
-      destAddress: destAddr || 'Destination',
-      route: chosen.geometry,
-      status: 'waiting' as const,
-      createdAt: Date.now(),
-    };
-    createRide(ride);
-    addRider({
-      userId: user.id,
-      userName: user.name,
-      isLeader: true,
-      location: startCoord,
-      heading: 0,
-      speed: 0,
-      lastUpdate: Date.now(),
-      isOnRoute: true,
-      isOnline: true,
-      routeFollowed: [],
-    });
-    navigate(`/ride/${ride.id}`);
-  }, [user, rideName, startAddr, destAddr, startCoord, destCoord, selectedRoute, routes, createRide, addRider, navigate]);
+    
+    // Use actual current location if detected, otherwise use start point
+    const riderLocation = currentLocation || startCoord;
+    
+    try {
+      const created = await createRideApi({
+        name: rideName || chosen.summary || 'My Ride',
+        leaderId: user.id,
+        startLocation: startCoord,
+        destination: destCoord,
+        startAddress: startAddr || 'Start point',
+        destAddress: destAddr || 'Destination',
+        route: chosen.geometry,
+        distanceMeters: chosen.distance,
+        durationSeconds: chosen.duration,
+      });
+
+      const joined = await joinRideApi(created.id, {
+        userId: user.id,
+        userName: user.name,
+        leader: true,
+      });
+
+      const ride = mapApiRideToRide(joined);
+      const mappedRiders = mapApiRidersToSessions(joined);
+      
+      // Find the leader (self) and update with actual location
+      const leaderIndex = mappedRiders.findIndex(r => r.userId === user.id);
+      if (leaderIndex !== -1) {
+        mappedRiders[leaderIndex].location = riderLocation;
+      }
+      
+      hydrateRide(ride, mappedRiders);
+      navigate(`/ride/${ride.id}`);
+    } catch (error) {
+      console.error(error);
+      alert('Failed to create ride. Please check backend connection and try again.');
+    }
+  }, [user, rideName, startAddr, destAddr, startCoord, destCoord, selectedRoute, routes, currentLocation, hydrateRide, navigate]);
 
   return (
     <div className="min-h-screen bg-background p-6 max-w-lg mx-auto">
@@ -177,13 +219,48 @@ export default function CreateRidePage() {
             onChange={(e) => setRideName(e.target.value)}
             className="bg-background/50 border-border/50"
           />
-          <LocationInput
-            placeholder="Search start location..."
-            value={startAddr}
-            onChange={setStartAddr}
-            onSelect={(r) => setStartCoord({ lat: r.lat, lng: r.lng })}
-            icon={<MapPin className="w-4 h-4 text-success" />}
-          />
+          <div className="space-y-2">
+            <div className="flex gap-2">
+              <div className="flex-1">
+                <LocationInput
+                  placeholder="Search start location..."
+                  value={startAddr}
+                  onChange={setStartAddr}
+                  onSelect={(r) => setStartCoord({ lat: r.lat, lng: r.lng })}
+                  icon={<MapPin className="w-4 h-4 text-success" />}
+                />
+              </div>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={handleUseCurrentLocation}
+                disabled={geoLoading}
+                title="Detect current location"
+                className="px-3"
+              >
+                {geoLoading ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Crosshair className="w-4 h-4" />
+                )}
+              </Button>
+            </div>
+            {geoError && (
+              <div className="flex items-center gap-2 text-xs text-destructive bg-destructive/10 px-3 py-2 rounded-lg">
+                <AlertCircle className="w-3 h-3 shrink-0" />
+                <span>{geoError.message}</span>
+              </div>
+            )}
+            {!geoError && currentLocation && (
+              <div className="flex items-center gap-2 text-xs text-success bg-success/10 px-3 py-2 rounded-lg">
+                <Check className="w-3 h-3 shrink-0" />
+                <span>Start location set: {currentLocation.lat.toFixed(4)}, {currentLocation.lng.toFixed(4)}</span>
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground px-0">
+              💡 Tap the location button to use your current position as the start location.
+            </p>
+          </div>
           <LocationInput
             placeholder="Search destination..."
             value={destAddr}

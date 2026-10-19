@@ -4,6 +4,7 @@ import com.riderroute.backend.model.LatLng;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.PositiveOrZero;
 
 import java.util.List;
 
@@ -22,6 +23,26 @@ public class CreateRideRequest {
     private String destAddress;
     @NotEmpty
     private List<LatLng> route;
+    @PositiveOrZero
+    private Double distanceMeters;
+    @PositiveOrZero
+    private Double durationSeconds;
+
+    public Double getDistanceMeters() {
+        return distanceMeters;
+    }
+
+    public void setDistanceMeters(Double distanceMeters) {
+        this.distanceMeters = distanceMeters;
+    }
+
+    public Double getDurationSeconds() {
+        return durationSeconds;
+    }
+
+    public void setDurationSeconds(Double durationSeconds) {
+        this.durationSeconds = durationSeconds;
+    }
 
     public String getName() {
         return name;

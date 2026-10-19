@@ -19,23 +19,32 @@ export function getDistance(a: LatLng, b: LatLng): number {
 export function getRouteDistance(position: LatLng, route: LatLng[]): number {
   if (route.length < 2) return 0;
   
-  // Find closest point on route
+  // Project onto segments so sparse route points do not overstate progress.
   let minDist = Infinity;
-  let closestIdx = 0;
-  for (let i = 0; i < route.length; i++) {
-    const d = getDistance(position, route[i]);
+  let remaining = 0;
+  let distanceAfterSegment = 0;
+  for (let i = route.length - 2; i >= 0; i--) {
+    const start = route[i];
+    const end = route[i + 1];
+    const longitudeScale = Math.cos((position.lat * Math.PI) / 180);
+    const dx = (end.lng - start.lng) * longitudeScale;
+    const dy = end.lat - start.lat;
+    const lengthSquared = dx * dx + dy * dy;
+    const fraction = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1,
+      (((position.lng - start.lng) * longitudeScale * dx) + (position.lat - start.lat) * dy) / lengthSquared,
+    ));
+    const projected = {
+      lat: start.lat + fraction * (end.lat - start.lat),
+      lng: start.lng + fraction * (end.lng - start.lng),
+    };
+    const d = getDistance(position, projected);
     if (d < minDist) {
       minDist = d;
-      closestIdx = i;
+      remaining = d + getDistance(projected, end) + distanceAfterSegment;
     }
+    distanceAfterSegment += getDistance(start, end);
   }
-
-  // Sum remaining route distance
-  let total = getDistance(position, route[closestIdx]);
-  for (let i = closestIdx; i < route.length - 1; i++) {
-    total += getDistance(route[i], route[i + 1]);
-  }
-  return total;
+  return remaining;
 }
 
 // ETA in seconds given distance (meters) and average speed (km/h)

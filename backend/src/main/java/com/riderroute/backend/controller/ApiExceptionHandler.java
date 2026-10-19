@@ -1,6 +1,7 @@
 package com.riderroute.backend.controller;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -13,9 +14,10 @@ import java.util.stream.Collectors;
 public class ApiExceptionHandler {
 
     @ExceptionHandler(IllegalArgumentException.class)
-    @ResponseStatus(HttpStatus.NOT_FOUND)
-    public Map<String, String> handleNotFound(IllegalArgumentException ex) {
-        return Map.of("error", ex.getMessage());
+    public ResponseEntity<Map<String, String>> handleIllegalArgument(IllegalArgumentException ex) {
+        String message = ex.getMessage() == null ? "Bad request" : ex.getMessage();
+        HttpStatus status = message.toLowerCase().contains("not found") ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST;
+        return ResponseEntity.status(status).body(Map.of("error", message));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

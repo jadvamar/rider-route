@@ -3,6 +3,7 @@ package com.riderroute.backend.controller;
 import com.riderroute.backend.dto.CreateRideRequest;
 import com.riderroute.backend.dto.JoinRideRequest;
 import com.riderroute.backend.dto.LocationUpdateRequest;
+import com.riderroute.backend.dto.TriggerSOSRequest;
 import com.riderroute.backend.model.Ride;
 import com.riderroute.backend.model.RideStatus;
 import com.riderroute.backend.service.RideService;
@@ -33,6 +34,11 @@ public class RideController {
         return rideService.listRides();
     }
 
+    @GetMapping("/user/{userId}")
+    public List<Ride> listByUser(@PathVariable String userId) {
+        return rideService.listRidesByUser(userId);
+    }
+
     @GetMapping("/{rideId}")
     public Ride getById(@PathVariable String rideId) {
         return rideService.getRideById(rideId);
@@ -60,5 +66,15 @@ public class RideController {
     @PatchMapping("/{rideId}/status")
     public Ride updateStatus(@PathVariable String rideId, @RequestParam RideStatus status) {
         return rideService.updateRideStatus(rideId, status);
+    }
+
+    @PostMapping("/{rideId}/sos")
+    public Ride triggerSOS(@PathVariable String rideId, @Valid @RequestBody TriggerSOSRequest request) {
+        return rideService.triggerSOS(rideId, request.getUserId(), request.getUserName(), request.getLocation());
+    }
+
+    @PostMapping("/{rideId}/sos/cancel")
+    public Ride cancelSOS(@PathVariable String rideId, @Valid @RequestBody TriggerSOSRequest request) {
+        return rideService.cancelSOS(rideId, request.getUserId());
     }
 }

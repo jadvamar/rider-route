@@ -20,8 +20,16 @@ export interface Ride {
   startAddress: string;
   destAddress: string;
   route: LatLng[];
+  distanceMeters?: number | null;
+  durationSeconds?: number | null;
   status: 'waiting' | 'active' | 'completed';
   createdAt: number;
+  activeSOS?: {
+    userId: string;
+    userName: string;
+    location?: LatLng;
+    timestamp: number;
+  };
 }
 
 export interface RiderSession {

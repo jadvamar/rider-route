@@ -20,9 +20,28 @@ public class Ride {
     private String startAddress;
     private String destAddress;
     private List<LatLng> route = new ArrayList<>();
+    private Double distanceMeters;
+    private Double durationSeconds;
+
+    public Double getDistanceMeters() {
+        return distanceMeters;
+    }
+
+    public void setDistanceMeters(Double distanceMeters) {
+        this.distanceMeters = distanceMeters;
+    }
+
+    public Double getDurationSeconds() {
+        return durationSeconds;
+    }
+
+    public void setDurationSeconds(Double durationSeconds) {
+        this.durationSeconds = durationSeconds;
+    }
     private RideStatus status = RideStatus.WAITING;
     private Instant createdAt = Instant.now();
     private List<RiderSession> riders = new ArrayList<>();
+    private SOSAlert activeSOS;
 
     public String getId() {
         return id;
@@ -118,5 +137,13 @@ public class Ride {
 
     public void setRiders(List<RiderSession> riders) {
         this.riders = riders;
+    }
+
+    public SOSAlert getActiveSOS() {
+        return activeSOS;
+    }
+
+    public void setActiveSOS(SOSAlert activeSOS) {
+        this.activeSOS = activeSOS;
     }
 }
