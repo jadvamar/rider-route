@@ -184,6 +184,7 @@ export default function CreateRidePage() {
         userId: user.id,
         userName: user.name,
         leader: true,
+        ...(currentLocation ? { location: currentLocation } : {}),
       });
 
       const ride = mapApiRideToRide(joined);

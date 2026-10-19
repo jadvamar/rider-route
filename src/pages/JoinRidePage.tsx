@@ -6,6 +6,7 @@ import { useRideStore } from '@/store/useRideStore';
 import { useEffect, useState } from 'react';
 import { getRideByCode, joinRide as joinRideApi, type ApiRide } from '@/services/api';
 import { JourneySummary } from '@/components/ride/JourneySummary';
+import RoutePreviewMap from '@/components/map/RoutePreviewMap';
 import { mapApiRideToRide, mapApiRidersToSessions } from '@/services/rideMapper';
 import { useGeolocation } from '@/hooks/useGeolocation';
 
@@ -18,19 +19,26 @@ export default function JoinRidePage() {
   const [error, setError] = useState('');
   const [preview, setPreview] = useState<ApiRide | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(true);
+  const [pendingJoin, setPendingJoin] = useState(false);
   
   // Geolocation hook
   const { location: currentLocation, error: geoError, loading: geoLoading, requestLocation } = useGeolocation();
 
+  useEffect(() => {
+    requestLocation();
+  }, [requestLocation]);
+
   const handleJoin = async (joinLocation = currentLocation) => {
     if (!user || !code || !preview || loadingPreview || preview.status === 'COMPLETED') return;
     
-    // Request location if not already detected
+    // Wait for the rider's real position; joining resumes once it arrives
     if (!joinLocation) {
+      setPendingJoin(true);
       requestLocation();
       return;
     }
 
+    setPendingJoin(false);
     setJoining(true);
     setError('');
     try {
@@ -38,6 +46,7 @@ export default function JoinRidePage() {
         userId: user.id,
         userName: user.name,
         leader: false,
+        location: joinLocation,
       });
 
       const ride = mapApiRideToRide(joined);
@@ -72,6 +81,17 @@ export default function JoinRidePage() {
       setJoining(false);
     }
   };
+
+  useEffect(() => {
+    if (pendingJoin && currentLocation && !joining) {
+      void handleJoin(currentLocation);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingJoin, currentLocation]);
+
+  useEffect(() => {
+    if (geoError) setPendingJoin(false);
+  }, [geoError]);
 
   useEffect(() => {
     let cancelled = false;
@@ -114,6 +134,7 @@ export default function JoinRidePage() {
         </h2>
         {preview && (
           <div className="text-left space-y-2 mb-4">
+            <RoutePreviewMap start={preview.startLocation} destination={preview.destination} route={preview.route} />
             <p className="text-sm text-muted-foreground"><strong>Start:</strong> {preview.startAddress}</p>
             <p className="text-sm text-muted-foreground"><strong>Destination:</strong> {preview.destAddress}</p>
             <JourneySummary ride={preview} />

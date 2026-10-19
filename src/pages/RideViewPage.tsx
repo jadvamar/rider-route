@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Copy, Check, ChevronUp, ChevronDown, Play, Square, Share2, Clock, MapPin, Users } from 'lucide-react';
+import { ArrowLeft, Copy, Check, ChevronUp, ChevronDown, Play, Square, Share2, Clock, MapPin, Users, Navigation, RefreshCw, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useRideStore } from '@/store/useRideStore';
@@ -8,14 +8,23 @@ import RideMap from '@/components/map/RideMap';
 import RiderList from '@/components/ride/RiderList';
 import { SOSButton, AlertBanner } from '@/components/ride/SOSButton';
 import { simulateMovement } from '@/services/mockSimulation';
-import { isOnRoute } from '@/services/locationService';
+import { getDistance, isOnRoute } from '@/services/locationService';
 import { useGeolocation } from '@/hooks/useGeolocation';
 import { playSOSSound, playAlertSound } from '@/lib/soundNotification';
-import type { RiderSession } from '@/types';
-import { getRideById, updateRideStatus, triggerSOS as triggerSOSApi, cancelSOS as cancelSOSApi } from '@/services/api';
+import type { LatLng, RiderSession } from '@/types';
+import { getRideById, updateRideStatus, updateRiderLocation as updateRiderLocationApi, triggerSOS as triggerSOSApi, cancelSOS as cancelSOSApi } from '@/services/api';
 import { mapApiRideToRide, mapApiRidersToSessions } from '@/services/rideMapper';
 import { getRemainingJourney } from '@/services/journeyService';
-import { formatRouteDistance, formatRouteDuration } from '@/services/routingService';
+import { fetchRoutes, formatRouteDistance, formatRouteDuration } from '@/services/routingService';
+
+interface RescueRoute {
+  sosId: string;
+  targetName: string;
+  geometry: LatLng[];
+  distance: number;
+  duration: number;
+  direct: boolean;
+}
 
 export default function RideViewPage() {
   const { id } = useParams<{ id: string }>();
@@ -42,6 +51,9 @@ export default function RideViewPage() {
     maximumAge: 5000,
     watch: true, // Enable continuous tracking
   });
+  const latestLocationRef = useRef(currentLocation);
+  latestLocationRef.current = currentLocation;
+  const lastSentLocationAt = useRef(0);
 
   // Compute derived state (must be before early returns)
   const isLoadingRide = !currentRide && id;
@@ -55,6 +67,58 @@ export default function RideViewPage() {
     ? `${id}:${user?.id}:${activeSOS.userId}:${activeSOS.timestamp}`
     : '';
   const visibleAlerts = alerts.filter((alert) => alert.type !== 'sos' || alert.fromUserId === user?.id);
+  const isReceivingSOS = !!activeSOS && activeSOS.userId !== user?.id;
+  const sosTargetLocation = activeSOS
+    ? activeSOS.location ?? riders.get(activeSOS.userId)?.location
+    : undefined;
+  const [rescueRoute, setRescueRoute] = useState<RescueRoute | null>(null);
+  const [rescueLoading, setRescueLoading] = useState(false);
+  const [rescueError, setRescueError] = useState('');
+
+  // A rescue route only makes sense while that exact SOS is still active.
+  useEffect(() => {
+    if (rescueRoute && rescueRoute.sosId !== sosNotificationId) {
+      setRescueRoute(null);
+      setRescueError('');
+    }
+  }, [rescueRoute, sosNotificationId]);
+
+  const handleRouteToSOS = useCallback(async () => {
+    if (!activeSOS || !sosNotificationId) return;
+    setDismissedSOSIds((previous) => new Set(previous).add(sosNotificationId));
+    const from = latestLocationRef.current ?? myLocation;
+    if (!from || !sosTargetLocation) {
+      setRescueError(!from ? 'Waiting for your GPS location to build the route.' : `${activeSOS.userName}'s location is not available yet.`);
+      return;
+    }
+    setRescueLoading(true);
+    setRescueError('');
+    try {
+      const [best] = await fetchRoutes(from, sosTargetLocation);
+      if (!best || best.geometry.length < 2) throw new Error('No route found');
+      setRescueRoute({
+        sosId: sosNotificationId,
+        targetName: activeSOS.userName,
+        geometry: best.geometry,
+        distance: best.distance,
+        duration: best.duration,
+        direct: false,
+      });
+    } catch (error) {
+      console.error('Failed to build route to SOS rider:', error);
+      const distance = getDistance(from, sosTargetLocation);
+      setRescueRoute({
+        sosId: sosNotificationId,
+        targetName: activeSOS.userName,
+        geometry: [from, sosTargetLocation],
+        distance,
+        duration: distance / (30 / 3.6),
+        direct: true,
+      });
+    } finally {
+      setRescueLoading(false);
+    }
+  }, [activeSOS, sosNotificationId, sosTargetLocation, myLocation]);
 
   // Load ride data
   useEffect(() => {
@@ -67,12 +131,26 @@ export default function RideViewPage() {
         if (cancelled) return;
         const ride = mapApiRideToRide(apiRide);
         const mappedRiders = mapApiRidersToSessions(apiRide);
+        const previousRiders = useRideStore.getState().riders;
+
+        // Backend falls back to the ride start for riders without a reported position;
+        // prefer this device's GPS for me and the last known position for everyone else.
+        mappedRiders.forEach((rider) => {
+          const reported = apiRide.riders?.find((r) => r.userId === rider.userId)?.location;
+          if (rider.userId === user?.id && latestLocationRef.current) {
+            rider.location = latestLocationRef.current;
+          } else if (!reported) {
+            const previous = previousRiders.get(rider.userId)?.location;
+            if (previous) rider.location = previous;
+          }
+        });
         
         // Ensure current user is in the riders list
         const userInRiders = mappedRiders.find((r) => r.userId === user?.id);
         if (!userInRiders && user) {
-          // Use ride's destination as initial location (don't use currentLocation here to avoid remounting map)
-          const initialLocation = ride.destination;
+          const initialLocation = latestLocationRef.current
+            ?? previousRiders.get(user.id)?.location
+            ?? ride.startLocation;
           console.log('👤 Adding current user with location:', initialLocation);
           
           mappedRiders.push({
@@ -120,7 +198,16 @@ export default function RideViewPage() {
     // Just update location
     console.log('🌍 Geolocation update:', currentLocation);
     updateRiderLocation(user.id, currentLocation, 0, 0);
-  }, [currentLocation, user?.id, updateRiderLocation, currentRide?.status, rideClosedByMe]);
+
+    const now = Date.now();
+    if (now - lastSentLocationAt.current < 3000) return;
+    lastSentLocationAt.current = now;
+    updateRiderLocationApi(currentRide.id, user.id, {
+      location: currentLocation,
+      onRoute: currentRide.route.length > 1 ? isOnRoute(currentLocation, currentRide.route) : true,
+    }).catch((error) => console.error('Failed to sync location:', error));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentLocation, user?.id, updateRiderLocation, currentRide?.id, currentRide?.status, rideClosedByMe]);
 
   // Fallback: simulate own location if geolocation fails
   useEffect(() => {
@@ -369,11 +456,16 @@ export default function RideViewPage() {
             </p>
           </div>
 
-          <div className="border-t border-border pt-4">
+          <div className="border-t border-border pt-4 mb-4">
             <p className="text-xs font-semibold text-muted-foreground mb-3">ROUTE</p>
             <p className="text-sm text-foreground mb-1">{currentRide.startAddress}</p>
             <p className="text-xs text-muted-foreground mb-3">↓</p>
             <p className="text-sm text-foreground">{currentRide.destAddress}</p>
+          </div>
+
+          <div className="border-t border-border pt-4">
+            <p className="text-xs font-semibold text-muted-foreground mb-3">RIDE CODE</p>
+            <p className="font-mono text-lg tracking-widest text-primary font-bold">{currentRide.code}</p>
           </div>
         </div>
 
@@ -468,8 +560,48 @@ export default function RideViewPage() {
           myUserId={user.id}
           route={currentRide.route}
           center={currentRide.startLocation}
+          start={currentRide.startLocation}
+          destination={currentRide.destination}
+          focus={currentLocation}
+          rescueRoute={rescueRoute?.geometry}
         />
       </div>
+
+      {/* Rescue route bar for riders receiving an SOS */}
+      {isReceivingSOS && activeSOS && dismissedSOSIds.has(sosNotificationId) && (
+        <div
+          className="absolute left-4 right-24 bottom-44 z-[1000] rounded-xl border-2 border-red-300 bg-white p-3 shadow-xl text-gray-900"
+          style={{ fontFamily: 'Inter, "Segoe UI", Roboto, Arial, sans-serif' }}
+          data-testid="rescue-route-bar"
+        >
+          {rescueRoute ? (
+            <div className="flex items-center gap-2">
+              <span className="h-1.5 w-6 shrink-0 rounded-full bg-red-300" aria-hidden />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-extrabold truncate">Route to {rescueRoute.targetName}</p>
+                <p className="text-sm font-semibold text-red-700">
+                  {formatRouteDistance(rescueRoute.distance)} · {formatRouteDuration(rescueRoute.duration)}
+                  {rescueRoute.direct && <span className="text-gray-600"> (straight line)</span>}
+                </p>
+              </div>
+              <Button size="sm" variant="outline" className="h-8 px-2 text-gray-900" onClick={handleRouteToSOS} disabled={rescueLoading} aria-label="Refresh route">
+                <RefreshCw className={`w-4 h-4 ${rescueLoading ? 'animate-spin' : ''}`} />
+              </Button>
+              <Button size="sm" variant="outline" className="h-8 px-2 text-gray-900" onClick={() => setRescueRoute(null)} aria-label="Clear route">
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <p className="min-w-0 flex-1 text-sm font-extrabold truncate">🚨 {activeSOS.userName} needs help</p>
+              <Button size="sm" className="h-8 gap-1 bg-red-600 font-bold text-white hover:bg-red-700" onClick={handleRouteToSOS} disabled={rescueLoading}>
+                <Navigation className="w-4 h-4" /> {rescueLoading ? 'Routing...' : 'Route'}
+              </Button>
+            </div>
+          )}
+          {rescueError && <p className="mt-1 text-xs font-semibold text-red-700">{rescueError}</p>}
+        </div>
+      )}
 
       {/* SOS button (floating) */}
       <div className="absolute bottom-40 right-4 z-[1000]">
@@ -483,26 +615,40 @@ export default function RideViewPage() {
 
       {/* Dismissing a notification does not cancel the sender's SOS. */}
       {activeSOS && activeSOS.userId !== user.id && !dismissedSOSIds.has(sosNotificationId) && (
-        <div className="absolute inset-0 z-[1100] bg-background/80 backdrop-blur-sm flex items-center justify-center">
-          <div role="alert" className="text-center">
-            <div className="mb-4">
-              <div className="text-6xl mb-3">🚨</div>
-              <h2 className="text-2xl font-bold text-destructive mb-2">SOS ALERT!</h2>
-              <p className="text-lg text-foreground mb-1">{activeSOS.userName} needs help</p>
-              <p className="text-sm text-muted-foreground">Emergency assistance required</p>
+        <div
+          className="absolute inset-0 z-[1100] bg-red-950/85 backdrop-blur-sm flex items-center justify-center p-4"
+          style={{ fontFamily: 'Inter, "Segoe UI", Roboto, Arial, sans-serif' }}
+        >
+          <div
+            role="alert"
+            className="w-full max-w-sm overflow-hidden rounded-2xl bg-white text-center shadow-2xl ring-4 ring-red-500"
+          >
+            <div className="bg-red-600 px-6 py-5">
+              <div className="text-6xl mb-2 leading-none">🚨</div>
+              <h2 className="text-3xl font-extrabold uppercase tracking-wider text-white">SOS ALERT!</h2>
             </div>
-            {activeSOS.location && (
-              <p className="text-xs text-muted-foreground mt-4">
-                Location: {activeSOS.location.lat.toFixed(4)}, {activeSOS.location.lng.toFixed(4)}
-              </p>
-            )}
-            <Button
-              variant="outline"
-              className="mt-6"
-              onClick={() => setDismissedSOSIds((previous) => new Set(previous).add(sosNotificationId))}
-            >
-              Cancel
-            </Button>
+            <div className="px-6 py-6">
+              <p className="text-2xl font-bold text-gray-900 mb-2 break-words">{activeSOS.userName} needs help</p>
+              <p className="text-lg font-semibold text-red-700">Emergency assistance required</p>
+              {activeSOS.location && (
+                <p className="mt-4 rounded-lg bg-gray-100 px-3 py-2 text-base font-medium text-gray-800">
+                  📍 {activeSOS.location.lat.toFixed(4)}, {activeSOS.location.lng.toFixed(4)}
+                </p>
+              )}
+              <Button
+                className="mt-6 h-12 w-full bg-red-600 text-lg font-bold text-white hover:bg-red-700 gap-2"
+                onClick={handleRouteToSOS}
+                disabled={rescueLoading}
+              >
+                <Navigation className="w-5 h-5" /> Route to {activeSOS.userName}
+              </Button>
+              <Button
+                className="mt-3 h-12 w-full bg-gray-900 text-lg font-bold text-white hover:bg-gray-800"
+                onClick={() => setDismissedSOSIds((previous) => new Set(previous).add(sosNotificationId))}
+              >
+                Cancel
+              </Button>
+            </div>
           </div>
         </div>
       )}

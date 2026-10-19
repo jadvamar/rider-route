@@ -10,6 +10,7 @@ import com.riderroute.backend.repository.RideRepository;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -60,9 +61,19 @@ public class RideService {
 
     public Ride joinRide(String rideId, JoinRideRequest request) {
         Ride ride = getRideById(rideId);
-        boolean exists = ride.getRiders().stream().anyMatch(r -> r.getUserId().equals(request.getUserId()));
-        if (!exists) {
+        RiderSession existing = ride.getRiders().stream()
+                .filter(r -> r.getUserId().equals(request.getUserId()))
+                .findFirst()
+                .orElse(null);
+        if (existing != null) {
+            if (request.getLocation() != null) {
+                existing.setLocation(request.getLocation());
+                existing.setOnline(true);
+                existing.setLastUpdate(Instant.now());
+            }
+        } else {
             RiderSession rider = new RiderSession();
+            rider.setLocation(request.getLocation());
             rider.setUserId(request.getUserId());
             rider.setUserName(request.getUserName());
             rider.setAvatar(request.getAvatar());
@@ -70,7 +81,7 @@ public class RideService {
             rider.setOnline(true);
             rider.setOnRoute(true);
             rider.setLastUpdate(Instant.now());
-            rider.setRouteFollowed(List.of());
+            rider.setRouteFollowed(new ArrayList<>());
             ride.getRiders().add(rider);
         }
         return rideRepository.save(ride);
@@ -89,10 +100,14 @@ public class RideService {
         rider.setOnRoute(request.isOnRoute());
         rider.setOnline(true);
         rider.setLastUpdate(Instant.now());
-        if (rider.getRouteFollowed().size() >= 100) {
-            rider.setRouteFollowed(rider.getRouteFollowed().subList(rider.getRouteFollowed().size() - 99, rider.getRouteFollowed().size()));
+        List<com.riderroute.backend.model.LatLng> trail = rider.getRouteFollowed() == null
+                ? new ArrayList<>()
+                : new ArrayList<>(rider.getRouteFollowed());
+        if (trail.size() >= 100) {
+            trail = new ArrayList<>(trail.subList(trail.size() - 99, trail.size()));
         }
-        rider.getRouteFollowed().add(request.getLocation());
+        trail.add(request.getLocation());
+        rider.setRouteFollowed(trail);
 
         return rideRepository.save(ride);
     }

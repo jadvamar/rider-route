@@ -110,12 +110,27 @@ export async function joinRide(
     userName: string;
     avatar?: string;
     leader?: boolean;
+    location?: ApiLatLng;
   },
 ) {
   return request<ApiRide>(`/rides/${encodeURIComponent(rideId)}/join`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export async function updateRiderLocation(
+  rideId: string,
+  userId: string,
+  payload: { location: ApiLatLng; heading?: number; speed?: number; onRoute?: boolean },
+) {
+  return request<ApiRide>(
+    `/rides/${encodeURIComponent(rideId)}/riders/${encodeURIComponent(userId)}/location`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    },
+  );
 }
 
 export async function updateRideStatus(

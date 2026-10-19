@@ -1,5 +1,6 @@
 package com.riderroute.backend.dto;
 
+import com.riderroute.backend.model.LatLng;
 import jakarta.validation.constraints.NotBlank;
 
 public class JoinRideRequest {
@@ -9,6 +10,15 @@ public class JoinRideRequest {
     private String userName;
     private String avatar;
     private boolean leader;
+    private LatLng location;
+
+    public LatLng getLocation() {
+        return location;
+    }
+
+    public void setLocation(LatLng location) {
+        this.location = location;
+    }
 
     public String getUserId() {
         return userId;

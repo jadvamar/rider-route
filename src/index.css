@@ -92,6 +92,37 @@
   border-color: hsl(220 14% 18%) !important;
 }
 
+/* High-contrast rider info popups on the map */
+.dark-popup .leaflet-popup-content-wrapper,
+.dark-popup .leaflet-popup-tip {
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+.dark-popup .leaflet-popup-content-wrapper {
+  border: 2px solid #1d4ed8;
+  border-radius: 12px;
+}
+.dark-popup .leaflet-popup-content {
+  margin: 10px 14px;
+  font-family: Inter, 'Segoe UI', Roboto, Arial, sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.dark-popup .leaflet-popup-content .text-sm {
+  font-size: 16px;
+  font-weight: 800;
+}
+.dark-popup .leaflet-popup-content .text-xs {
+  font-size: 13px;
+  opacity: 1;
+}
+.dark-popup .leaflet-popup-close-button {
+  color: #0f172a !important;
+  font-weight: 700;
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 6px;

@@ -57,7 +57,7 @@ export function SOSButton({ onTrigger, onCancel, disabled, isActive }: SOSButton
         {isActive ? (confirming ? 'CANCEL?' : 'ACTIVE') : (confirming ? 'CONFIRM' : 'SOS')}
       </button>
       {isActive && (
-        <div className="text-xs text-destructive bg-destructive/10 px-3 py-1 rounded-full animate-pulse">
+        <div className="text-sm font-extrabold uppercase tracking-wide text-white bg-red-600 border-2 border-white px-3 py-1 rounded-full shadow-lg animate-pulse whitespace-nowrap">
           SOS ALERT ACTIVE
         </div>
       )}
@@ -75,25 +75,33 @@ export function AlertBanner({ alert, onDismiss }: AlertBannerProps) {
 
   return (
     <div
+      role="status"
       className={`
-        flex items-center gap-3 p-3 rounded-lg animate-slide-up
-        ${isSOS ? 'bg-destructive/20 border border-destructive/50' : 'bg-warning/20 border border-warning/50'}
+        flex items-center gap-3 p-3.5 rounded-xl shadow-xl border-2 animate-slide-up
+        ${isSOS ? 'bg-red-600 border-white text-white' : 'bg-amber-400 border-amber-600 text-gray-950'}
       `}
+      style={{ fontFamily: 'Inter, "Segoe UI", Roboto, Arial, sans-serif' }}
     >
       {isSOS ? (
-        <Phone className="w-5 h-5 text-destructive shrink-0" />
+        <Phone className="w-6 h-6 shrink-0" />
       ) : (
-        <AlertTriangle className="w-5 h-5 text-warning shrink-0" />
+        <AlertTriangle className="w-6 h-6 shrink-0" />
       )}
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold text-foreground">
+        <p className="text-base font-extrabold leading-tight">
           {isSOS ? `SOS from ${alert.fromUserName}!` : alert.message}
         </p>
-        <p className="text-xs text-muted-foreground truncate">
+        <p className={`text-sm font-semibold truncate ${isSOS ? 'text-red-50' : 'text-gray-800'}`}>
           {isSOS ? 'Emergency — check their location' : `From ${alert.fromUserName}`}
         </p>
       </div>
-      <button onClick={onDismiss} className="text-muted-foreground hover:text-foreground text-sm p-1">
+      <button
+        onClick={onDismiss}
+        aria-label="Dismiss alert"
+        className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-base font-bold ${
+          isSOS ? 'bg-white/20 hover:bg-white/30 text-white' : 'bg-black/10 hover:bg-black/20 text-gray-950'
+        }`}
+      >
         ✕
       </button>
     </div>

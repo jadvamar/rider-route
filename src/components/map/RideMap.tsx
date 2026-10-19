@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, memo } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import {
   MapContainer,
   TileLayer,
@@ -59,20 +59,30 @@ function createRiderIcon(
   });
 }
 
-function MapUpdater({ center }: { center: LatLng }) {
+function MapUpdater({ center, points, focus }: { center: LatLng; points: LatLng[]; focus?: LatLng | null }) {
   const map = useMap();
   const initialized = useRef(false);
+  const focused = useRef(false);
   useEffect(() => {
-    if (
-      !initialized.current &&
-      center &&
-      typeof center.lat === "number" &&
-      typeof center.lng === "number"
-    ) {
+    const valid = (p?: LatLng | null): p is LatLng =>
+      !!p && typeof p.lat === "number" && typeof p.lng === "number";
+    if (focused.current) return;
+    if (valid(focus)) {
+      const bounds = [...points.filter(valid), focus].map((p) => [p.lat, p.lng] as L.LatLngTuple);
+      if (bounds.length > 1) {
+        map.fitBounds(L.latLngBounds(bounds), { padding: [40, 40], maxZoom: 15 });
+      } else {
+        map.setView([focus.lat, focus.lng], 14);
+      }
+      focused.current = true;
+      initialized.current = true;
+      return;
+    }
+    if (!initialized.current && valid(center)) {
       map.setView([center.lat, center.lng], 14);
       initialized.current = true;
     }
-  }, [center, map]);
+  }, [center, focus, points, map]);
   return null;
 }
 
@@ -81,18 +91,54 @@ interface RideMapProps {
   myUserId: string;
   route: LatLng[];
   center: LatLng;
+  start?: LatLng;
+  destination?: LatLng;
+  focus?: LatLng | null;
+  rescueRoute?: LatLng[];
   onRiderClick?: (rider: RiderSession) => void;
 }
+
+function FitRescueRoute({ route }: { route?: LatLng[] }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!route || route.length < 2) return;
+    map.fitBounds(L.latLngBounds(route.map((p) => [p.lat, p.lng] as L.LatLngTuple)), {
+      padding: [60, 60],
+      maxZoom: 16,
+    });
+  }, [map, route]);
+  return null;
+}
+
+function createEndpointIcon(label: string, color: string) {
+  return L.divIcon({
+    className: "route-endpoint-marker",
+    html: `<div style="width:26px;height:26px;border-radius:6px;background:${color};border:2px solid #fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;color:#fff;box-shadow:0 2px 6px rgba(0,0,0,0.4);">${label}</div>`,
+    iconSize: [26, 26],
+    iconAnchor: [13, 13],
+  });
+}
+
+const startIcon = createEndpointIcon("A", "#16a34a");
+const destIcon = createEndpointIcon("B", "#dc2626");
 
 export default function RideMap({
   riders,
   myUserId,
   route,
   center,
+  start,
+  destination,
+  focus,
+  rescueRoute,
   onRiderClick,
 }: RideMapProps) {
   const [selectedRider, setSelectedRider] = useState<RiderSession | null>(null);
   const myLocation = riders.find((r) => r.userId === myUserId)?.location;
+  const endpoints = useMemo(
+    () => [start, destination].filter((p): p is LatLng => !!p),
+    [start, destination],
+  );
   
   // Debug logging
   useEffect(() => {
@@ -126,7 +172,7 @@ export default function RideMap({
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
-        <MapUpdater center={center} />
+        <MapUpdater center={center} points={endpoints} focus={focus} />
 
         {/* Route polyline — Google Maps style with border + fill */}
         {route.length > 1 && (
@@ -154,6 +200,32 @@ export default function RideMap({
               }}
             />
           </>
+        )}
+
+        {/* Rescue route to the rider who raised SOS (light red) */}
+        <FitRescueRoute route={rescueRoute} />
+        {rescueRoute && rescueRoute.length > 1 && (
+          <>
+            <Polyline
+              positions={rescueRoute.map((p) => [p.lat, p.lng] as L.LatLngTuple)}
+              pathOptions={{ color: "#b91c1c", weight: 9, opacity: 0.35, lineCap: "round", lineJoin: "round" }}
+            />
+            <Polyline
+              positions={rescueRoute.map((p) => [p.lat, p.lng] as L.LatLngTuple)}
+              pathOptions={{ color: "#fca5a5", weight: 5, opacity: 1, lineCap: "round", lineJoin: "round" }}
+            />
+          </>
+        )}
+
+        {start && (
+          <Marker position={[start.lat, start.lng]} icon={startIcon} zIndexOffset={-100}>
+            <Popup className="dark-popup"><div className="text-sm font-semibold">Start</div></Popup>
+          </Marker>
+        )}
+        {destination && (
+          <Marker position={[destination.lat, destination.lng]} icon={destIcon} zIndexOffset={-100}>
+            <Popup className="dark-popup"><div className="text-sm font-semibold">Destination</div></Popup>
+          </Marker>
         )}
 
         {/* Rider markers */}

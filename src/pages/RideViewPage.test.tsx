@@ -4,11 +4,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import RideViewPage from './RideViewPage';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useRideStore } from '@/store/useRideStore';
-import { cancelSOS, getRideById, type ApiRide } from '@/services/api';
+import { cancelSOS, getRideById, updateRiderLocation, type ApiRide } from '@/services/api';
 import { playSOSSound } from '@/lib/soundNotification';
+import { fetchRoutes } from '@/services/routingService';
 
 const gps = vi.hoisted(() => ({ location: { lat: 12, lng: 77 } as { lat: number; lng: number } | null }));
-vi.mock('@/components/map/RideMap', () => ({ default: () => null }));
+const mapProps = vi.hoisted(() => ({ last: null as null | { rescueRoute?: { lat: number; lng: number }[] } }));
+vi.mock('@/components/map/RideMap', () => ({
+  default: (props: { rescueRoute?: { lat: number; lng: number }[] }) => {
+    mapProps.last = props;
+    return null;
+  },
+}));
+vi.mock('@/services/routingService', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/services/routingService')>(),
+  fetchRoutes: vi.fn(),
+}));
 vi.mock('@/hooks/useGeolocation', () => ({
   useGeolocation: () => ({ location: gps.location, error: null }),
 }));
@@ -19,6 +30,7 @@ vi.mock('@/lib/soundNotification', () => ({
 vi.mock('@/services/api', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/services/api')>(),
   getRideById: vi.fn(),
+  updateRiderLocation: vi.fn().mockResolvedValue({}),
   triggerSOS: vi.fn(),
   cancelSOS: vi.fn(),
 }));
@@ -174,5 +186,80 @@ describe('received SOS notifications', () => {
     await openRide();
     expect(screen.getByText('Waiting for your GPS location...')).toBeInTheDocument();
     expect(screen.queryByText(/km left/)).not.toBeInTheDocument();
+  });
+
+  it('keeps my GPS location instead of the ride start and syncs it to the backend', async () => {
+    gps.location = { lat: 19.07, lng: 72.87 };
+    vi.mocked(getRideById).mockResolvedValue({ ...makeRide(), activeSOS: undefined });
+    await openRide();
+    await poll();
+    await poll();
+
+    const state = useRideStore.getState();
+    expect(state.riders.get('receiver')?.location).toEqual({ lat: 19.07, lng: 72.87 });
+    expect(state.currentRide?.startLocation).toEqual({ lat: 12, lng: 77 });
+    expect(state.currentRide?.destination).toEqual({ lat: 13, lng: 78 });
+    expect(updateRiderLocation).toHaveBeenCalledWith('ride-1', 'receiver', expect.objectContaining({
+      location: { lat: 19.07, lng: 72.87 },
+    }));
+  });
+
+  it('shows other riders at their reported location', async () => {
+    vi.mocked(getRideById).mockResolvedValue({
+      ...makeRide(), activeSOS: undefined,
+      riders: [
+        { userId: 'receiver', userName: 'Receiver', leader: false },
+        { userId: 'sender', userName: 'Sender', leader: true, location: { lat: 28.6, lng: 77.2 } },
+      ],
+    });
+    await openRide();
+    expect(useRideStore.getState().riders.get('sender')?.location).toEqual({ lat: 28.6, lng: 77.2 });
+  });
+
+  it('routes the receiver from their GPS to the SOS rider in light red, and clears it when SOS ends', async () => {
+    gps.location = { lat: 12.1, lng: 77.1 };
+    const rescuePath = [{ lat: 12.1, lng: 77.1 }, { lat: 12.05, lng: 77.05 }, { lat: 12, lng: 77 }];
+    vi.mocked(fetchRoutes).mockResolvedValue([{ distance: 15200, duration: 1500, geometry: rescuePath, summary: 'x' } as never]);
+    vi.mocked(getRideById).mockResolvedValue(makeRide());
+    await openRide();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Route to Sender' }));
+    });
+
+    expect(fetchRoutes).toHaveBeenCalledWith({ lat: 12.1, lng: 77.1 }, { lat: 12, lng: 77 });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(mapProps.last?.rescueRoute).toEqual(rescuePath);
+    expect(screen.getByTestId('rescue-route-bar')).toHaveTextContent('Route to Sender');
+    expect(screen.getByTestId('rescue-route-bar')).toHaveTextContent('15.2 km · 25 min');
+    expect(cancelSOS).not.toHaveBeenCalled();
+
+    vi.mocked(getRideById).mockResolvedValue({ ...makeRide(), activeSOS: undefined });
+    await poll();
+    expect(mapProps.last?.rescueRoute).toBeUndefined();
+    expect(screen.queryByTestId('rescue-route-bar')).not.toBeInTheDocument();
+  });
+
+  it('offers the route button after the popup is closed and falls back to a straight line', async () => {
+    gps.location = { lat: 12.1, lng: 77 };
+    vi.mocked(fetchRoutes).mockRejectedValue(new Error('offline'));
+    vi.mocked(getRideById).mockResolvedValue(makeRide());
+    await openRide();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Route' }));
+    });
+
+    expect(mapProps.last?.rescueRoute).toEqual([{ lat: 12.1, lng: 77 }, { lat: 12, lng: 77 }]);
+    expect(screen.getByTestId('rescue-route-bar')).toHaveTextContent('(straight line)');
+  });
+
+  it('does not show a rescue route option to the rider who raised the SOS', async () => {
+    useAuthStore.setState({ user: { id: 'sender', name: 'Sender', email: 'sender@example.com' } });
+    vi.mocked(getRideById).mockResolvedValue(makeRide());
+    await openRide();
+    expect(screen.queryByRole('button', { name: /Route/ })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('rescue-route-bar')).not.toBeInTheDocument();
   });
 });

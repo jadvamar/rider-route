@@ -19,10 +19,16 @@ vi.mock('@/hooks/useGeolocation', () => ({
   }),
 }));
 
+vi.mock('@/components/map/RoutePreviewMap', () => ({
+  default: ({ start, destination, route }: { start: unknown; destination: unknown; route: unknown[] }) => (
+    <div data-testid="route-preview-map">{JSON.stringify({ start, destination, points: route.length })}</div>
+  ),
+}));
+
 const ride: ApiRide = {
   id: 'ride', name: 'Weekend trip', code: 'ABC123', leaderId: 'leader',
   startLocation: { lat: 12, lng: 77 }, destination: { lat: 13, lng: 78 },
-  startAddress: 'Start town', destAddress: 'End town', route: [],
+  startAddress: 'Start town', destAddress: 'End town', route: [{ lat: 12, lng: 77 }, { lat: 12.5, lng: 77.5 }, { lat: 13, lng: 78 }],
   distanceMeters: 125000, durationSeconds: 9000,
   status: 'WAITING', createdAt: '2026-10-15T10:00:00Z',
 };
@@ -55,6 +61,15 @@ describe('ride details before joining', () => {
     expect(await screen.findByText('Weekend trip')).toBeInTheDocument();
     expect(screen.getByText(/125.0 km.*2h 30m estimated/)).toBeInTheDocument();
     expect(screen.getByText(/Start town.*End town/)).toBeInTheDocument();
+    expect(screen.getByText('Ongoing')).toHaveClass('text-green-500');
+  });
+
+  it('marks completed rides as closed in red on the home page', async () => {
+    vi.mocked(getRidesByUser).mockResolvedValue([{ ...ride, id: 'done', name: 'Old trip', status: 'COMPLETED' }]);
+    render(<MemoryRouter><Dashboard /></MemoryRouter>);
+    expect(await screen.findByText('Old trip')).toBeInTheDocument();
+    expect(screen.getByText('Closed')).toHaveClass('text-red-500');
+    expect(screen.queryByText('Ongoing')).not.toBeInTheDocument();
   });
 
   it('loads details without joining, then joins only on confirmation', async () => {
@@ -65,11 +80,14 @@ describe('ride details before joining', () => {
     expect(screen.getByText('Start town')).toBeInTheDocument();
     expect(screen.getByText('End town')).toBeInTheDocument();
     expect(screen.getByText(/125.0 km.*2h 30m estimated/)).toBeInTheDocument();
+    expect(screen.getByTestId('route-preview-map')).toHaveTextContent(
+      JSON.stringify({ start: { lat: 12, lng: 77 }, destination: { lat: 13, lng: 78 }, points: 3 }),
+    );
     expect(joinRide).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Join Ride' }));
     await screen.findByText('Joined ride view');
     expect(joinRide).toHaveBeenCalledExactlyOnceWith('ride', {
-      userId: 'rider', userName: 'Rider', leader: false,
+      userId: 'rider', userName: 'Rider', leader: false, location: { lat: 12, lng: 77 },
     });
     expect(useRideStore.getState().currentRide?.distanceMeters).toBe(125000);
   });

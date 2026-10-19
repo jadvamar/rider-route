@@ -111,7 +111,15 @@ export default function Dashboard() {
               <div key={ride.id} className="glass rounded-lg p-3 flex items-center gap-3">
                 <MapPin className="w-4 h-4 text-primary shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-foreground truncate">{ride.name}</p>
+                  <p className="text-sm font-medium text-foreground flex items-center gap-1.5 min-w-0">
+                    <span className="truncate">{ride.name}</span>
+                    <span className="text-muted-foreground shrink-0">|</span>
+                    {ride.status === 'COMPLETED' ? (
+                      <span className="text-xs font-semibold text-red-500 shrink-0">Closed</span>
+                    ) : (
+                      <span className="text-xs font-semibold text-green-500 shrink-0">Ongoing</span>
+                    )}
+                  </p>
                   <p className="text-xs text-muted-foreground flex items-center gap-1">
                     <Clock className="w-3 h-3" />
                     {new Date(ride.createdAt).toLocaleDateString()} · {ride.startAddress} → {ride.destAddress}
