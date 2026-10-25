@@ -1,12 +1,43 @@
 # Rider Route
 
-Frontend is a Vite + React app. A new Spring Boot + MongoDB backend has been added in `backend`.
+The frontend and backend are separate applications:
+
+```text
+rider-route/
+  frontend/          Vite + React app, frontend configs, tests, and package files
+    src/
+    public/
+    .env             Local frontend environment settings (not committed)
+    package.json
+  backend/           Spring Boot + MongoDB app and Maven files
+    src/
+    pom.xml
+  package.json       Convenience scripts that forward to frontend/
+```
 
 ## Frontend
 
 ```bash
+cd frontend
 npm install
 npm run dev
+```
+
+Frontend URL: `http://localhost:8080`.
+
+Keep `VITE_API_BASE_URL` and other frontend environment settings in `frontend/.env`.
+The existing local environment file was moved there unchanged. Backend settings
+stay in `backend` and are not affected by this folder split.
+
+After installing frontend dependencies, the existing commands also work from the
+repository root: `npm run dev`, `npm run build`, and `npm test`.
+
+### Frontend checks
+
+```bash
+cd frontend
+npm test
+npm run build
 ```
 
 ### SOS notifications
@@ -68,7 +99,7 @@ $env:JAVA_HOME = "C:\Program Files\Java\jdk-17"   # adjust to your install path
 .\mvnw.cmd spring-boot:run
 ```
 
-Backend API base URL: `http://localhost:8082/api`
+Backend API base URL: `http://localhost:8083/api`
 
 ## Backend API endpoints
 
