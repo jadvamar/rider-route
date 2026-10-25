@@ -115,6 +115,31 @@ describe('received SOS notifications', () => {
     expect(useRideStore.getState().alerts).toHaveLength(0);
   });
 
+  it.each([
+    { userId: 'sender', isLeader: true },
+    { userId: 'receiver', isLeader: false },
+  ])('shows the waiting popup only to the creator: $userId', async ({ userId, isLeader }) => {
+    useAuthStore.setState({ user: { id: userId, name: userId, email: `${userId}@example.com` } });
+    vi.mocked(getRideById).mockResolvedValue({ ...makeRide(), status: 'WAITING', activeSOS: undefined });
+    await openRide();
+    await poll();
+
+    if (isLeader) {
+      expect(screen.getByRole('heading', { name: 'Waiting for riders' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Start' })).toBeInTheDocument();
+    } else {
+      expect(screen.queryByRole('heading', { name: 'Waiting for riders' })).not.toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Waiting for the ride to start' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Copy Code' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Start' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Start Ride' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Show riders' })).toBeInTheDocument();
+    }
+    vi.mocked(getRideById).mockResolvedValue({ ...makeRide(), status: 'ACTIVE', activeSOS: undefined });
+    await poll();
+    expect(screen.queryByRole('heading', { name: /Waiting for/ })).not.toBeInTheDocument();
+  });
+
   it('does not repeat an already received SOS or route automatically after returning', async () => {
     vi.mocked(getRideById).mockResolvedValue(makeRide());
     const geometry = [{ lat: 12, lng: 77 }, { lat: 12.1, lng: 77.1 }];
@@ -515,7 +540,7 @@ describe('non-leader closing a ride', () => {
     await openRide();
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Leave Ride/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'Leave' }));
     });
 
     expect(closeRideForRider).toHaveBeenCalledWith('ride-1', 'receiver');
@@ -543,7 +568,7 @@ describe('non-leader closing a ride', () => {
     expect(screen.getByText('2 riders')).toBeInTheDocument();
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Leave Ride/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'Leave' }));
     });
     expect(screen.getByText('Gone Rider')).toBeInTheDocument();
     expect(screen.getByText('Left ride')).toBeInTheDocument();
@@ -559,7 +584,7 @@ describe('non-leader closing a ride', () => {
     await openRide();
 
     expect(screen.getByRole('heading', { name: 'You Left' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Leave Ride/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Leave' })).not.toBeInTheDocument();
   });
 
   it.each(['closed', 'left'] as const)('rejoins an open ride after the rider has %s it', async (flag) => {
@@ -583,7 +608,7 @@ describe('non-leader closing a ride', () => {
       userId: 'receiver', userName: 'Receiver', leader: false, location: gps.location,
     });
     expect(screen.queryByRole('heading', { name: 'You Left' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Leave Ride/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Leave' })).toBeInTheDocument();
     expect(useRideStore.getState().riders.get('receiver')?.hasLeft).toBe(false);
     expect(updateRiderLocation).toHaveBeenCalled();
   });

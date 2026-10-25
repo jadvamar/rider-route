@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, LogIn, LogOut, MapPin, Clock, History, Pencil, Trash2, X } from 'lucide-react';
+import { Plus, Hash, ArrowRight, LogOut, MapPin, Clock, History, Pencil, Trash2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useAuthStore } from '@/store/useAuthStore';
@@ -79,10 +79,10 @@ export default function Dashboard() {
       </div>
 
       {/* Actions */}
-      <div className="grid grid-cols-2 gap-4 mb-8">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 mb-8">
         <button
           onClick={() => navigate('/create')}
-          className="glass-strong rounded-xl p-6 text-left hover:border-primary/30 transition-colors group"
+          className="glass-strong rounded-lg p-4 sm:p-6 min-w-0 flex flex-col items-start text-left hover:border-primary/30 transition-colors group"
         >
           <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center mb-3 group-hover:glow-primary transition-shadow">
             <Plus className="w-5 h-5 text-primary" />
@@ -91,32 +91,26 @@ export default function Dashboard() {
           <p className="text-xs text-muted-foreground mt-1">Start a new group ride</p>
         </button>
 
-        <button
-          onClick={() => document.getElementById('join-input')?.focus()}
-          className="glass-strong rounded-xl p-6 text-left hover:border-accent/30 transition-colors group"
-        >
-          <div className="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center mb-3">
-            <LogIn className="w-5 h-5 text-accent" />
+        <form onSubmit={handleJoin} className="glass-strong rounded-lg p-4 sm:p-6 flex min-w-0 flex-col items-start hover:border-primary/30 transition-colors group">
+          <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center mb-3 group-hover:glow-primary transition-shadow">
+            <Hash className="w-5 h-5 text-primary" />
           </div>
-          <h3 className="font-semibold text-foreground text-sm">Join Ride</h3>
-          <p className="text-xs text-muted-foreground mt-1">Enter a ride code</p>
-        </button>
+          <label htmlFor="join-input" className="font-semibold text-foreground text-sm">Ride Code</label>
+          <div className="mt-3 flex w-full min-w-0 items-center gap-1.5">
+            <Input
+              id="join-input"
+              placeholder="ABC123"
+              value={joinCode}
+              onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+              maxLength={6}
+              className="h-9 min-w-0 flex-1 bg-background/50 border-border/50 px-1 font-mono tracking-normal text-center text-xs sm:text-sm"
+            />
+            <Button type="submit" size="icon" disabled={joinCode.length < 4} className="h-9 w-8 shrink-0" aria-label="Preview" title="Preview ride">
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </form>
       </div>
-
-      {/* Join form */}
-      <form onSubmit={handleJoin} className="glass rounded-xl p-4 flex gap-2 mb-8">
-        <Input
-          id="join-input"
-          placeholder="Enter ride code (e.g. ABC123)"
-          value={joinCode}
-          onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
-          maxLength={6}
-          className="bg-background/50 border-border/50 font-mono tracking-widest text-center"
-        />
-        <Button type="submit" disabled={joinCode.length < 4}>
-          Preview
-        </Button>
-      </form>
 
       {/* Ride history */}
       <div>

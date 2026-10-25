@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Copy, Check, ChevronUp, ChevronDown, Play, Square, Share2, Clock, MapPin, Users, Navigation, RefreshCw, X, Pencil } from 'lucide-react';
+import { ArrowLeft, Copy, Check, ChevronUp, ChevronDown, Play, Share2, Clock, MapPin, Users, Navigation, RefreshCw, X, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useRideStore } from '@/store/useRideStore';
@@ -594,12 +594,12 @@ export default function RideViewPage() {
           )}
           {isLeader && currentRide.status === 'active' && (
             <Button size="sm" variant="destructive" onClick={handleEndRide} className="gap-1">
-              <Square className="w-3 h-3" /> Close Ride
+              Close
             </Button>
           )}
           {!isLeader && currentRide.status === 'active' && (
             <Button size="sm" variant="destructive" onClick={handleCloseRide} className="gap-1">
-              <Square className="w-3 h-3" /> Leave Ride
+              Leave
             </Button>
           )}
         </div>
@@ -806,19 +806,25 @@ export default function RideViewPage() {
       {currentRide.status === 'waiting' && (
         <div className="absolute inset-0 z-[999] bg-background/60 backdrop-blur-sm flex items-center justify-center">
           <div className="glass-strong rounded-2xl p-8 text-center max-w-xs mx-4">
-            <h3 className="text-lg font-bold text-foreground mb-2">Waiting for riders</h3>
-            <p className="text-sm text-muted-foreground mb-4">Share this code to invite others</p>
-            <div className="bg-background/50 rounded-lg p-4 font-mono text-2xl tracking-[0.3em] text-primary font-bold mb-4">
-              {currentRide.code}
-            </div>
-            <Button onClick={handleCopyCode} variant="outline" className="gap-2">
-              {copied ? <Check className="w-4 h-4" /> : <Share2 className="w-4 h-4" />}
-              {copied ? 'Copied!' : 'Copy Code'}
-            </Button>
-            {isLeader && (
-              <Button onClick={handleStartRide} className="w-full mt-3">
-                <Play className="w-4 h-4 mr-1" /> Start Ride
-              </Button>
+            <h3 className="text-lg font-bold text-foreground mb-2">
+              {isLeader ? 'Waiting for riders' : 'Waiting for the ride to start'}
+            </h3>
+            {isLeader ? (
+              <>
+                <p className="text-sm text-muted-foreground mb-4">Share this code to invite others</p>
+                <div className="bg-background/50 rounded-lg p-4 font-mono text-2xl tracking-[0.3em] text-primary font-bold mb-4">
+                  {currentRide.code}
+                </div>
+                <Button onClick={handleCopyCode} variant="outline" className="gap-2">
+                  {copied ? <Check className="w-4 h-4" /> : <Share2 className="w-4 h-4" />}
+                  {copied ? 'Copied!' : 'Copy Code'}
+                </Button>
+                <Button onClick={handleStartRide} className="w-full mt-3">
+                  <Play className="w-4 h-4 mr-1" /> Start Ride
+                </Button>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">The ride creator has not started the ride yet.</p>
             )}
           </div>
         </div>

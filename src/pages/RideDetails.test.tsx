@@ -56,6 +56,27 @@ describe('ride details before joining', () => {
   });
   afterEach(cleanup);
 
+  it('replaces the Join Ride option with a ride code form that opens the preview', async () => {
+    vi.mocked(getRidesByUser).mockResolvedValue([]);
+    render(
+      <MemoryRouter>
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/join/ABC123" element={<p>Ride code preview</p>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await screen.findByText('No rides yet');
+    expect(screen.queryByRole('button', { name: /Join Ride/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Preview' })).toBeDisabled();
+    const code = screen.getByRole('textbox', { name: 'Ride Code' });
+    fireEvent.change(code, { target: { value: 'abc123' } });
+    expect(code).toHaveValue('ABC123');
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    expect(await screen.findByText('Ride code preview')).toBeInTheDocument();
+    expect(joinRide).not.toHaveBeenCalled();
+  });
+
   it('shows saved totals in recent rides', async () => {
     vi.mocked(getRidesByUser).mockResolvedValue([ride]);
     render(<MemoryRouter><Dashboard /></MemoryRouter>);
