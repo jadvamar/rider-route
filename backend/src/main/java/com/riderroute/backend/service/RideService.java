@@ -82,10 +82,7 @@ public class RideService {
                 .toList();
     }
 
-    /**
-     * Removes the ride from this user's history only. Once every member (leader and all
-     * riders) has removed it, nobody can see it any more, so the ride is deleted for good.
-     */
+    /** Removes the ride from this user's history only, without deleting the stored ride. */
     public void hideRideForUser(String rideId, String userId) {
         Ride ride = getRideById(rideId);
         Set<String> members = new HashSet<>();
@@ -98,10 +95,6 @@ public class RideService {
         }
         Set<String> hidden = ride.getHiddenFor() == null ? new HashSet<>() : new HashSet<>(ride.getHiddenFor());
         hidden.add(userId);
-        if (hidden.containsAll(members)) {
-            rideRepository.delete(ride);
-            return;
-        }
         ride.getRiders().stream()
                 .filter(rider -> userId.equals(rider.getUserId()))
                 .forEach(rider -> {
@@ -114,6 +107,9 @@ public class RideService {
 
     public Ride joinRide(String rideId, JoinRideRequest request) {
         Ride ride = getRideById(rideId);
+        if (ride.getStatus() == RideStatus.COMPLETED) {
+            throw new IllegalArgumentException("Completed rides cannot be joined");
+        }
         // Re-joining a ride brings it back into this rider's history.
         if (ride.getHiddenFor() != null && ride.getHiddenFor().contains(request.getUserId())) {
             Set<String> hidden = new HashSet<>(ride.getHiddenFor());
@@ -127,7 +123,9 @@ public class RideService {
         if (existing != null) {
             // Re-joining after removing the ride from history starts sharing location again.
             existing.setLeft(false);
-            if (request.getLocation() != null && !existing.isClosed()) {
+            existing.setClosed(false);
+            existing.setClosedAt(null);
+            if (request.getLocation() != null) {
                 existing.setLocation(request.getLocation());
                 existing.setOnline(true);
                 existing.setLastUpdate(Instant.now());
@@ -206,6 +204,24 @@ public class RideService {
         ride.setActiveSOS(new com.riderroute.backend.model.SOSAlert(userId, userName, location, System.currentTimeMillis()));
         return rideRepository.save(ride);
     }
+
+        public Ride alertWrongRoute(String rideId, String targetUserId, String fromUserId) {
+        Ride ride = getRideById(rideId);
+        if (ride.getStatus() != RideStatus.ACTIVE) {
+            throw new IllegalArgumentException("Alerts can only be sent during an ongoing ride");
+        }
+        RiderSession sender = ride.getRiders().stream()
+            .filter(rider -> rider.getUserId().equals(fromUserId) && !rider.isClosed() && !rider.isLeft())
+            .findFirst()
+            .orElseThrow(() -> new IllegalArgumentException("Sender is not active in this ride"));
+        RiderSession target = ride.getRiders().stream()
+            .filter(rider -> rider.getUserId().equals(targetUserId) && !rider.isClosed() && !rider.isLeft())
+            .findFirst()
+            .orElseThrow(() -> new IllegalArgumentException("Rider is not active in this ride"));
+        target.setWrongRouteAlert(new com.riderroute.backend.model.WrongRouteAlert(
+            UUID.randomUUID().toString(), sender.getUserId(), sender.getUserName(), System.currentTimeMillis()));
+        return rideRepository.save(ride);
+        }
 
     public Ride cancelSOS(String rideId, String userId) {
         Ride ride = getRideById(rideId);

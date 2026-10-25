@@ -118,6 +118,45 @@ class CloseRideForRiderTests {
     }
 
     @Test
+    void rejoiningAfterClosingAndDeletingReopensOnlyThatRider() {
+        Ride ride = activeRide();
+        RideService service = serviceFor(ride);
+        service.closeRideForRider("ride-1", "rider");
+        service.hideRideForUser("ride-1", "rider");
+
+        com.riderroute.backend.dto.JoinRideRequest join = new com.riderroute.backend.dto.JoinRideRequest();
+        join.setUserId("rider");
+        join.setUserName("rider");
+        join.setLocation(new LatLng(14, 79));
+        service.joinRide("ride-1", join);
+
+        RiderSession rejoined = find(ride, "rider");
+        assertFalse(rejoined.isClosed());
+        assertFalse(rejoined.isLeft());
+        assertNull(rejoined.getClosedAt());
+        assertTrue(rejoined.isOnline());
+        assertEquals(14, rejoined.getLocation().lat());
+        assertFalse(ride.getHiddenFor().contains("rider"));
+        assertEquals(3, ride.getRiders().size());
+        assertEquals(RideStatus.ACTIVE, ride.getStatus());
+    }
+
+    @Test
+    void completedRideCannotBeRejoined() {
+        Ride ride = activeRide();
+        RideService service = serviceFor(ride);
+        service.closeRideForRider("ride-1", "rider");
+        ride.setStatus(RideStatus.COMPLETED);
+        com.riderroute.backend.dto.JoinRideRequest join = new com.riderroute.backend.dto.JoinRideRequest();
+        join.setUserId("rider");
+        join.setUserName("rider");
+
+        assertThrows(IllegalArgumentException.class, () -> service.joinRide("ride-1", join));
+        assertTrue(find(ride, "rider").isClosed());
+        assertEquals(RideStatus.COMPLETED, ride.getStatus());
+    }
+
+    @Test
     void lateLocationUpdatesDoNotReopenAClosedRider() {
         Ride ride = activeRide();
         RideService service = serviceFor(ride);
@@ -130,6 +169,41 @@ class CloseRideForRiderTests {
         assertTrue(find(ride, "rider").isClosed());
         assertFalse(find(ride, "rider").isOnline());
         assertNull(find(ride, "rider").getLocation());
+    }
+
+    @Test
+    void wrongRouteAlertIsStoredForOnlyTheTargetRiderAndDeliveredInRideData() throws Exception {
+        Ride ride = activeRide();
+        RideService service = serviceFor(ride);
+
+        service.alertWrongRoute("ride-1", "rider", "leader");
+
+        var notification = find(ride, "rider").getWrongRouteAlert();
+        assertNotNull(notification);
+        assertEquals("leader", notification.fromUserId());
+        assertEquals("leader", notification.fromUserName());
+        assertNotNull(notification.id());
+        assertTrue(notification.timestamp() > 0);
+        assertNull(find(ride, "other").getWrongRouteAlert());
+        assertNull(find(ride, "leader").getWrongRouteAlert());
+        assertTrue(new ObjectMapper().findAndRegisterModules().writeValueAsString(ride).contains(notification.id()));
+
+        service.alertWrongRoute("ride-1", "rider", "leader");
+        assertNotEquals(notification.id(), find(ride, "rider").getWrongRouteAlert().id());
+        service.closeRideForRider("ride-1", "rider");
+        assertNull(find(ride, "rider").getWrongRouteAlert());
+    }
+
+    @Test
+    void wrongRouteAlertsRequireAnActiveRideAndParticipatingRiders() {
+        Ride ride = activeRide();
+        RideService service = serviceFor(ride);
+        assertThrows(IllegalArgumentException.class, () -> service.alertWrongRoute("ride-1", "rider", "stranger"));
+        service.closeRideForRider("ride-1", "rider");
+        assertThrows(IllegalArgumentException.class, () -> service.alertWrongRoute("ride-1", "rider", "leader"));
+        assertThrows(IllegalArgumentException.class, () -> service.alertWrongRoute("ride-1", "other", "rider"));
+        ride.setStatus(RideStatus.COMPLETED);
+        assertThrows(IllegalArgumentException.class, () -> service.alertWrongRoute("ride-1", "other", "leader"));
     }
 
     @Test

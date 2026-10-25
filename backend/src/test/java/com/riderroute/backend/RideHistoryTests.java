@@ -93,7 +93,7 @@ class RideHistoryTests {
     }
 
     @Test
-    void rideIsDeletedFromDatabaseOnlyWhenEveryMemberHasRemovedIt() {
+    void rideIsRetainedWhenEveryMemberHasRemovedIt() {
         Ride ride = sharedRide();
         RideRepository repository = repoFor(ride);
         RideService service = new RideService(repository);
@@ -102,7 +102,12 @@ class RideHistoryTests {
         verify(repository, never()).delete(any());
 
         service.hideRideForUser("ride-1", "leader");
-        verify(repository).delete(ride);
+        verify(repository, never()).delete(any());
+        verify(repository, times(2)).save(ride);
+        assertTrue(service.listRidesByUser("rider").isEmpty());
+        assertTrue(service.listRidesByUser("leader").isEmpty());
+        assertTrue(ride.getRiders().stream().allMatch(RiderSession::isLeft));
+        assertSame(ride, service.getRideById("ride-1"));
     }
 
     @Test
@@ -119,15 +124,32 @@ class RideHistoryTests {
     }
 
     @Test
-    void soloRideIsDeletedAsSoonAsItsOnlyMemberRemovesIt() {
+    void soloRideIsRetainedWhenItsOnlyMemberRemovesIt() {
         Ride ride = sharedRide();
         ride.setRiders(new ArrayList<>(List.of(rider("leader"))));
         RideRepository repository = repoFor(ride);
 
         new RideService(repository).hideRideForUser("ride-1", "leader");
 
-        verify(repository).delete(ride);
-        verify(repository, never()).save(any());
+        verify(repository, never()).delete(any());
+        verify(repository).save(ride);
+        assertTrue(ride.getHiddenFor().contains("leader"));
+        assertTrue(ride.getRiders().get(0).isLeft());
+    }
+
+    @Test
+    void rideWithZeroRidersIsRetainedWhenCreatorRemovesItFromHistory() {
+        Ride ride = sharedRide();
+        ride.setRiders(new ArrayList<>());
+        RideRepository repository = repoFor(ride);
+        RideService service = new RideService(repository);
+
+        service.hideRideForUser("ride-1", "leader");
+
+        verify(repository, never()).delete(any());
+        verify(repository).save(ride);
+        assertTrue(service.listRidesByUser("leader").isEmpty());
+        assertSame(ride, service.getRideById("ride-1"));
     }
 
     @Test

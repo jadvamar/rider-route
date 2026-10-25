@@ -90,6 +90,11 @@ public class RideController {
         return rideService.triggerSOS(rideId, request.getUserId(), request.getUserName(), request.getLocation());
     }
 
+    @PostMapping("/{rideId}/riders/{userId}/wrong-route-alert")
+    public Ride alertWrongRoute(@PathVariable String rideId, @PathVariable String userId, @RequestParam String fromUserId) {
+        return rideService.alertWrongRoute(rideId, userId, fromUserId);
+    }
+
     @PostMapping("/{rideId}/sos/cancel")
     public Ride cancelSOS(@PathVariable String rideId, @Valid @RequestBody TriggerSOSRequest request) {
         return rideService.cancelSOS(rideId, request.getUserId());

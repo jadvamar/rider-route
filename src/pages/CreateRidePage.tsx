@@ -1,8 +1,9 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, MapPin, Navigation, Search, Loader2, Route, Crosshair, AlertCircle, Check } from 'lucide-react';
+import { ArrowLeft, MapPin, Navigation, Search, Loader2, Route, Crosshair, AlertCircle, Check, Save, Undo2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useRideStore } from '@/store/useRideStore';
 import { fetchRouteOptions, routesOverlap, geocodeAddress, reverseGeocodeAddress, formatRouteDistance, formatRouteDuration } from '@/services/routingService';
@@ -112,6 +113,7 @@ export default function CreateRidePage() {
   const [loadingRide, setLoadingRide] = useState(isEdit);
   const [loadError, setLoadError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [confirmation, setConfirmation] = useState<'save' | 'discard' | null>(null);
   // The ride's saved route, offered as "Current route" while start/destination are unchanged.
   const savedRouteRef = useRef<{ key: string; route: RouteOption } | null>(null);
   const locationRequestedRef = useRef(false);
@@ -234,7 +236,7 @@ export default function CreateRidePage() {
   }, [startCoord, destCoord, handleFetchRoutes]);
 
   const handleSave = useCallback(async () => {
-    if (!user || !editRideId || selectedRoute === null || !startCoord || !destCoord) return;
+    if (!user || !editRideId || selectedRoute === null || !startCoord || !destCoord || saving) return;
     const chosen = routes[selectedRoute];
     setSaving(true);
     try {
@@ -257,7 +259,7 @@ export default function CreateRidePage() {
     } finally {
       setSaving(false);
     }
-  }, [user, editRideId, selectedRoute, startCoord, destCoord, routes, rideName, startAddr, destAddr, hydrateRide, navigate]);
+  }, [user, editRideId, selectedRoute, startCoord, destCoord, routes, rideName, startAddr, destAddr, hydrateRide, navigate, saving]);
 
   const handleCreate = useCallback(async () => {
     if (!user || selectedRoute === null || !startCoord || !destCoord) return;
@@ -330,7 +332,7 @@ export default function CreateRidePage() {
 
   return (
     <div className="min-h-screen bg-background p-6 max-w-lg mx-auto">
-      <button onClick={() => navigate(backTo)} className="flex items-center gap-2 text-muted-foreground hover:text-foreground mb-6 text-sm">
+      <button onClick={() => isEdit ? setConfirmation('discard') : navigate(backTo)} disabled={saving} className="flex items-center gap-2 text-muted-foreground hover:text-foreground mb-6 text-sm">
         <ArrowLeft className="w-4 h-4" /> Back
       </button>
 
@@ -508,15 +510,45 @@ export default function CreateRidePage() {
           </button>
         )}
 
-        <Button
-          onClick={isEdit ? handleSave : handleCreate}
-          disabled={selectedRoute === null || !startCoord || !destCoord || saving}
-          className="w-full"
-          size="lg"
-        >
-          {isEdit ? (saving ? 'Saving...' : 'Save Changes') : 'Create Ride'}
-        </Button>
+        <div className={`grid gap-3 ${isEdit ? 'grid-cols-2' : 'grid-cols-1'}`}>
+          {isEdit && (
+            <Button onClick={() => setConfirmation('discard')} disabled={saving} variant="outline" className="h-12 w-full min-w-0 whitespace-normal px-2 text-xs sm:text-sm" size="lg">
+              <Undo2 className="h-4 w-4" /> Discard Changes
+            </Button>
+          )}
+          <Button
+            onClick={isEdit ? () => setConfirmation('save') : handleCreate}
+            disabled={selectedRoute === null || !startCoord || !destCoord || saving}
+            className="h-12 w-full min-w-0 whitespace-normal px-2 text-xs sm:text-sm"
+            size="lg"
+          >
+            {isEdit && <Save className="h-4 w-4" />}
+            {isEdit ? (saving ? 'Saving...' : 'Save Changes') : 'Create Ride'}
+          </Button>
+        </div>
       </div>
+
+      <AlertDialog open={confirmation !== null} onOpenChange={(open) => { if (!open) setConfirmation(null); }}>
+        <AlertDialogContent className="w-[calc(100%-2rem)] rounded-lg">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{confirmation === 'save' ? 'Save changes?' : 'Discard changes?'}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmation === 'save'
+                ? 'Update this ride with your changes? All riders will see the updated details.'
+                : 'Your unsaved changes will be lost. The ride will remain unchanged.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep Editing</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => confirmation === 'save' ? void handleSave() : navigate(backTo)}
+              className={confirmation === 'discard' ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90' : undefined}
+            >
+              {confirmation === 'save' ? 'Confirm Save' : 'Confirm Discard'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

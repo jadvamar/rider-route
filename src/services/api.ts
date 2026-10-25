@@ -66,6 +66,12 @@ export interface ApiRide {
     online?: boolean;
     closed?: boolean;
     left?: boolean;
+    wrongRouteAlert?: {
+      id: string;
+      fromUserId: string;
+      fromUserName: string;
+      timestamp: number;
+    };
     routeFollowed?: ApiLatLng[];
   }[];
 }
@@ -176,6 +182,13 @@ export async function getRidesByUser(userId: string) {
 export async function closeRideForRider(rideId: string, userId: string) {
   return request<ApiRide>(
     `/rides/${encodeURIComponent(rideId)}/riders/${encodeURIComponent(userId)}/close`,
+    { method: "POST" },
+  );
+}
+
+export async function alertWrongRoute(rideId: string, userId: string, fromUserId: string) {
+  return request<ApiRide>(
+    `/rides/${encodeURIComponent(rideId)}/riders/${encodeURIComponent(userId)}/wrong-route-alert?fromUserId=${encodeURIComponent(fromUserId)}`,
     { method: "POST" },
   );
 }

@@ -4,7 +4,7 @@ import { Plus, LogIn, LogOut, MapPin, Clock, History, Pencil, Trash2, X } from '
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useAuthStore } from '@/store/useAuthStore';
-import { getRidesByUser, isRideClosedFor, removeRideFromHistory, type ApiRide } from '@/services/api';
+import { getRidesByUser, removeRideFromHistory, type ApiRide } from '@/services/api';
 import { JourneySummary } from '@/components/ride/JourneySummary';
 
 export default function Dashboard() {
@@ -174,8 +174,10 @@ export default function Dashboard() {
                   <p className="text-sm font-medium text-foreground flex items-center gap-1.5 min-w-0">
                     <span className="truncate">{ride.name}</span>
                     <span className="text-muted-foreground shrink-0">|</span>
-                    {isRideClosedFor(ride, user?.id) ? (
+                    {ride.status === 'COMPLETED' ? (
                       <span className="text-xs font-semibold text-red-500 shrink-0">Closed</span>
+                    ) : ride.riders?.some((rider) => rider.userId === user?.id && (rider.closed || rider.left)) ? (
+                      <span className="text-xs font-semibold text-amber-500 shrink-0">You Left</span>
                     ) : (
                       <span className="text-xs font-semibold text-green-500 shrink-0">Ongoing</span>
                     )}

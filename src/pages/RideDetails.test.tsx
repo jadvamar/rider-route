@@ -88,23 +88,34 @@ describe('ride details before joining', () => {
     expect(screen.queryByText('Ongoing')).not.toBeInTheDocument();
   });
 
-  it('shows Closed only for the rider who closed an ongoing ride', async () => {
+  it.each(['closed', 'left'] as const)('shows You Left only for the rider whose %s flag is set', async (flag) => {
     const shared: ApiRide = {
       ...ride,
       status: 'ACTIVE',
       riders: [
         { userId: 'leader', userName: 'Leader', leader: true },
-        { userId: 'rider', userName: 'Rider', leader: false, closed: true },
+        { userId: 'rider', userName: 'Rider', leader: false, [flag]: true },
       ],
     };
     vi.mocked(getRidesByUser).mockResolvedValue([shared]);
     render(<MemoryRouter><Dashboard /></MemoryRouter>);
-    expect(await screen.findByText('Closed')).toHaveClass('text-red-500');
+    expect(await screen.findByText('You Left')).toHaveClass('text-amber-500');
+    expect(screen.queryByText('Closed')).not.toBeInTheDocument();
     cleanup();
 
     useAuthStore.setState({ user: { id: 'leader', name: 'Leader', email: 'leader@example.com' } });
     render(<MemoryRouter><Dashboard /></MemoryRouter>);
     expect(await screen.findByText('Ongoing')).toHaveClass('text-green-500');
+  });
+
+  it('shows Closed instead of You Left when the leader has ended the ride', async () => {
+    vi.mocked(getRidesByUser).mockResolvedValue([{
+      ...ride, status: 'COMPLETED',
+      riders: [{ userId: 'rider', userName: 'Rider', leader: false, closed: true, left: true }],
+    }]);
+    render(<MemoryRouter><Dashboard /></MemoryRouter>);
+    expect(await screen.findByText('Closed')).toHaveClass('text-red-500');
+    expect(screen.queryByText('You Left')).not.toBeInTheDocument();
   });
 
   it('shows Edit only on the leader\'s own rides that are still ongoing', async () => {

@@ -144,6 +144,9 @@ describe('editing a ride', () => {
 
     fireEvent.change(name, { target: { value: 'Sunset Cruise' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+    expect(updateRide).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm Save' }));
 
     await screen.findByText('Ride screen');
     expect(updateRide).toHaveBeenCalledWith('ride-9', expect.objectContaining({
@@ -172,9 +175,40 @@ describe('editing a ride', () => {
     expect(fetchRouteOptions).toHaveBeenCalledWith(savedRoute[0], { lat: 14, lng: 79 }, 3);
 
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm Save' }));
+    await screen.findByText('Ride screen');
     await vi.waitFor(() => expect(updateRide).toHaveBeenCalledWith('ride-9', expect.objectContaining({
       destination: { lat: 14, lng: 79 }, route: newGeometry, distanceMeters: 300000, durationSeconds: 12000,
     })));
+  });
+
+  it('keeps edits when the save confirmation is cancelled', async () => {
+    useAuthStore.setState({ user: { id: 'leader', name: 'Leader', email: 'leader@example.com' } });
+    renderEdit();
+    fireEvent.change(await screen.findByDisplayValue('Sunday Cruise'), { target: { value: 'Unsaved name' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep Editing' }));
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue('Unsaved name')).toBeInTheDocument();
+    expect(updateRide).not.toHaveBeenCalled();
+  });
+
+  it.each(['Discard Changes', 'Back'])('confirms discarding edits through %s without saving', async (button) => {
+    useAuthStore.setState({ user: { id: 'leader', name: 'Leader', email: 'leader@example.com' } });
+    renderEdit();
+    fireEvent.change(await screen.findByDisplayValue('Sunday Cruise'), { target: { value: 'Unsaved name' } });
+    fireEvent.click(screen.getByRole('button', { name: button }));
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Discard changes?');
+    fireEvent.click(screen.getByRole('button', { name: 'Keep Editing' }));
+    expect(screen.getByDisplayValue('Unsaved name')).toBeInTheDocument();
+    expect(screen.queryByText('Ride screen')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: button }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm Discard' }));
+
+    expect(await screen.findByText('Ride screen')).toBeInTheDocument();
+    expect(updateRide).not.toHaveBeenCalled();
   });
 
   it('blocks riders who are not the leader', async () => {

@@ -4,8 +4,7 @@ server:
 spring:
   data:
     mongodb:
-      uri: ${MONGODB_URI:mongodb://localhost:27017/rider_route}
-
+      uri: "mongodb+srv://ride:ride@cluster0.9rffq4m.mongodb.net/rider_route"
 app:
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:8080,http://localhost:5173}

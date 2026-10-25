@@ -1,4 +1,0 @@
--------------------------------------------------------------------------------
-Test set: com.riderroute.backend.CloseRideForRiderTests
--------------------------------------------------------------------------------
-Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.921 s -- in com.riderroute.backend.CloseRideForRiderTests

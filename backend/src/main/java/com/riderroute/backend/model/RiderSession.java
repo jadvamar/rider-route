@@ -20,6 +20,15 @@ public class RiderSession {
     private Instant closedAt;
     /** True once this rider removed the ride from their history; their location is no longer shared. */
     private boolean left;
+    private WrongRouteAlert wrongRouteAlert;
+
+    public WrongRouteAlert getWrongRouteAlert() {
+        return wrongRouteAlert;
+    }
+
+    public void setWrongRouteAlert(WrongRouteAlert wrongRouteAlert) {
+        this.wrongRouteAlert = wrongRouteAlert;
+    }
 
     public boolean isLeft() {
         return left;
@@ -31,6 +40,7 @@ public class RiderSession {
 
     /** Clears every stored position so other riders can no longer see where this rider is. */
     public void forgetLocation() {
+        this.wrongRouteAlert = null;
         this.location = null;
         this.routeFollowed = new ArrayList<>();
         this.online = false;

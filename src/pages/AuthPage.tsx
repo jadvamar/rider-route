@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { MapPin, Users, Shield } from "lucide-react";
+import { MapPin, Users, Shield, Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuthStore } from "@/store/useAuthStore";
@@ -10,6 +10,7 @@ export default function AuthPage() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const { login, signup } = useAuthStore();
@@ -27,7 +28,14 @@ export default function AuthPage() {
       }
       navigate("/dashboard");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Authentication failed");
+      if (isLogin && err instanceof Error && err.message === "Email not registered") {
+        setIsLogin(false);
+        setPassword("");
+        setShowPassword(false);
+        setError("No account found for this email. Create an account to continue.");
+      } else {
+        setError(err instanceof Error ? err.message : "Authentication failed");
+      }
     } finally {
       setLoading(false);
     }
@@ -89,15 +97,29 @@ export default function AuthPage() {
             required
             className="bg-background/50 border-border/50"
           />
-          <Input
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            minLength={6}
-            className="bg-background/50 border-border/50"
-          />
+          <div className="relative">
+            <Input
+              type={showPassword ? "text" : "password"}
+              placeholder="Password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              minLength={8}
+              className="bg-background/50 border-border/50 pr-12"
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="absolute right-0 top-0 h-10 w-10 text-muted-foreground hover:text-foreground"
+              onClick={() => setShowPassword(!showPassword)}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              title={showPassword ? "Hide password" : "Show password"}
+              aria-pressed={showPassword}
+            >
+              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </Button>
+          </div>
 
           <Button type="submit" className="w-full" disabled={loading}>
             {loading ? "Please wait..." : isLogin ? "Sign In" : "Sign Up"}
@@ -109,7 +131,10 @@ export default function AuthPage() {
           {isLogin ? "Don't have an account?" : "Already have an account?"}{" "}
           <button
             type="button"
-            onClick={() => setIsLogin(!isLogin)}
+            onClick={() => {
+              setIsLogin(!isLogin);
+              setShowPassword(false);
+            }}
             className="text-primary hover:underline font-medium"
           >
             {isLogin ? "Sign up" : "Sign in"}

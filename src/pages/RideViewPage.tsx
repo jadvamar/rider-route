@@ -10,21 +10,11 @@ import { SOSButton, AlertBanner } from '@/components/ride/SOSButton';
 import { simulateMovement } from '@/services/mockSimulation';
 import { getDistance, isOnRoute } from '@/services/locationService';
 import { useGeolocation } from '@/hooks/useGeolocation';
-import { playSOSSound, playAlertSound } from '@/lib/soundNotification';
 import type { LatLng, RiderSession } from '@/types';
-import { closeRideForRider, getRideById, updateRideStatus, updateRiderLocation as updateRiderLocationApi, triggerSOS as triggerSOSApi, cancelSOS as cancelSOSApi } from '@/services/api';
+import { alertWrongRoute, closeRideForRider, getRideById, joinRide, updateRideStatus, updateRiderLocation as updateRiderLocationApi, triggerSOS as triggerSOSApi, cancelSOS as cancelSOSApi } from '@/services/api';
 import { mapApiRideToRide, mapApiRidersToSessions } from '@/services/rideMapper';
 import { getRemainingJourney } from '@/services/journeyService';
 import { fetchRoutes, formatRouteDistance, formatRouteDuration } from '@/services/routingService';
-
-interface RescueRoute {
-  sosId: string;
-  targetName: string;
-  geometry: LatLng[];
-  distance: number;
-  duration: number;
-  direct: boolean;
-}
 
 export default function RideViewPage() {
   const { id } = useParams<{ id: string }>();
@@ -34,14 +24,16 @@ export default function RideViewPage() {
     currentRide, riders, alerts, activeSOS,
     addRider, updateRiderLocation, addAlert, dismissAlert, setActiveSOS,
     startRide, endRide, setRiderOnRoute, hydrateRide,
+    notificationReceipts, rescueRoutes, acknowledgeNotification, saveRescueRoute,
   } = useRideStore();
 
   const [panelOpen, setPanelOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [alertCooldowns, setAlertCooldowns] = useState<Set<string>>(new Set());
-  const receivedSOSIds = useRef(new Set<string>());
-  const [dismissedSOSIds, setDismissedSOSIds] = useState<Set<string>>(new Set());
+  const [popupSOSId, setPopupSOSId] = useState<string | null>(null);
   const [rideClosedByMe, setRideClosedByMe] = useState(false);
+  const [rejoining, setRejoining] = useState(false);
+  const [rejoinError, setRejoinError] = useState('');
   const simulationRef = useRef<number>();
   
   // Geolocation hook for real-time location tracking
@@ -68,26 +60,27 @@ export default function RideViewPage() {
   const sosNotificationId = activeSOS
     ? `${id}:${user?.id}:${activeSOS.userId}:${activeSOS.timestamp}`
     : '';
-  const visibleAlerts = alerts.filter((alert) => alert.type !== 'sos' || alert.fromUserId === user?.id);
+  const visibleAlerts = alerts.filter((alert) =>
+    (!alert.toUserId || alert.toUserId === user?.id)
+    && (alert.type !== 'sos' || alert.fromUserId === user?.id));
   const isReceivingSOS = !!activeSOS && activeSOS.userId !== user?.id;
   const sosTargetLocation = activeSOS
     ? activeSOS.location ?? riders.get(activeSOS.userId)?.location
     : undefined;
-  const [rescueRoute, setRescueRoute] = useState<RescueRoute | null>(null);
+  const sosRouteDismissalId = `${sosNotificationId}:route-dismissed`;
+  const isSOSRouteDismissed = !!notificationReceipts[sosRouteDismissalId];
+  const rescueRoute = isSOSRouteDismissed ? null : rescueRoutes[sosNotificationId] ?? null;
   const [rescueLoading, setRescueLoading] = useState(false);
   const [rescueError, setRescueError] = useState('');
 
-  // A rescue route only makes sense while that exact SOS is still active.
   useEffect(() => {
-    if (rescueRoute && rescueRoute.sosId !== sosNotificationId) {
-      setRescueRoute(null);
-      setRescueError('');
-    }
-  }, [rescueRoute, sosNotificationId]);
+    setRescueError('');
+  }, [sosNotificationId]);
 
   const handleRouteToSOS = useCallback(async () => {
     if (!activeSOS || !sosNotificationId) return;
-    setDismissedSOSIds((previous) => new Set(previous).add(sosNotificationId));
+    setPopupSOSId(null);
+    acknowledgeNotification(sosNotificationId);
     const from = latestLocationRef.current ?? myLocation;
     if (!from || !sosTargetLocation) {
       setRescueError(!from ? 'Waiting for your GPS location to build the route.' : `${activeSOS.userName}'s location is not available yet.`);
@@ -98,7 +91,7 @@ export default function RideViewPage() {
     try {
       const [best] = await fetchRoutes(from, sosTargetLocation);
       if (!best || best.geometry.length < 2) throw new Error('No route found');
-      setRescueRoute({
+      saveRescueRoute(sosNotificationId, {
         sosId: sosNotificationId,
         targetName: activeSOS.userName,
         geometry: best.geometry,
@@ -109,7 +102,7 @@ export default function RideViewPage() {
     } catch (error) {
       console.error('Failed to build route to SOS rider:', error);
       const distance = getDistance(from, sosTargetLocation);
-      setRescueRoute({
+      saveRescueRoute(sosNotificationId, {
         sosId: sosNotificationId,
         targetName: activeSOS.userName,
         geometry: [from, sosTargetLocation],
@@ -120,7 +113,7 @@ export default function RideViewPage() {
     } finally {
       setRescueLoading(false);
     }
-  }, [activeSOS, sosNotificationId, sosTargetLocation, myLocation]);
+  }, [activeSOS, sosNotificationId, sosTargetLocation, myLocation, acknowledgeNotification, saveRescueRoute]);
 
   // Load ride data
   useEffect(() => {
@@ -131,9 +124,7 @@ export default function RideViewPage() {
       try {
         const apiRide = await getRideById(id);
         if (cancelled) return;
-        if (user && apiRide.riders?.some((r) => r.userId === user.id && (r.closed || r.left))) {
-          setRideClosedByMe(true);
-        }
+        setRideClosedByMe(!!user && !!apiRide.riders?.some((r) => r.userId === user.id && (r.closed || r.left)));
         const ride = mapApiRideToRide(apiRide);
         const mappedRiders = mapApiRidersToSessions(apiRide);
         const previousRiders = useRideStore.getState().riders;
@@ -174,13 +165,28 @@ export default function RideViewPage() {
         }
         
         hydrateRide(ride, mappedRiders);
+
+        const mySession = apiRide.riders?.find((rider) => rider.userId === user?.id);
+        const notification = mySession?.wrongRouteAlert;
+        const notificationKey = `${id}:${user?.id}:${notification?.id}`;
+        if (notification && mySession && !mySession.closed && !mySession.left
+          && apiRide.status === 'ACTIVE' && !useRideStore.getState().notificationReceipts[notificationKey]) {
+          acknowledgeNotification(notificationKey);
+          addAlert({
+            ...notification,
+            id: notificationKey,
+            type: 'wrong_route',
+            toUserId: mySession.userId,
+            message: 'You are on the wrong route! Return to the selected route.',
+          });
+        }
         
         setActiveSOS(ride.activeSOS ?? null);
         if (ride.activeSOS && user && ride.activeSOS.userId !== user.id) {
           const sosId = `${id}:${user.id}:${ride.activeSOS.userId}:${ride.activeSOS.timestamp}`;
-          if (!receivedSOSIds.current.has(sosId)) {
-            receivedSOSIds.current.add(sosId);
-            playSOSSound();
+          if (!useRideStore.getState().notificationReceipts[sosId]) {
+            acknowledgeNotification(sosId);
+            setPopupSOSId(sosId);
           }
         }
       } catch (error) {
@@ -194,7 +200,7 @@ export default function RideViewPage() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [id, user, hydrateRide, setActiveSOS]);
+  }, [id, user, hydrateRide, setActiveSOS, addAlert, acknowledgeNotification]);
 
   // Update user location when geolocation updates (without triggering map remount)
   useEffect(() => {
@@ -269,14 +275,6 @@ export default function RideViewPage() {
       timestamp: sosData.timestamp,
     });
     
-    // Play SOS sound
-    console.log('🔊 Playing SOS sound');
-    try {
-      playSOSSound();
-    } catch (err) {
-      console.error('Failed to play sound:', err);
-    }
-    
     // Try to call API to trigger SOS (this will broadcast to backend)
     try {
       console.log('📤 Calling triggerSOSApi...');
@@ -342,26 +340,31 @@ export default function RideViewPage() {
     return () => clearTimeout(timeout);
   }, [alerts, dismissAlert]);
 
-  const handleAlertRider = useCallback((rider: RiderSession) => {
-    if (!user || alertCooldowns.has(rider.userId)) return;
-    addAlert({
-      id: crypto.randomUUID(),
-      type: 'wrong_route',
-      fromUserId: user.id,
-      fromUserName: user.name,
-      toUserId: rider.userId,
-      message: `${rider.userName}, you are on the wrong route!`,
-      timestamp: Date.now(),
-    });
+  const handleAlertRider = useCallback(async (rider: RiderSession) => {
+    if (!user || !currentRide || alertCooldowns.has(rider.userId)) return;
     setAlertCooldowns((prev) => new Set(prev).add(rider.userId));
-    setTimeout(() => {
+    const clearCooldown = () => {
       setAlertCooldowns((prev) => {
         const next = new Set(prev);
         next.delete(rider.userId);
         return next;
       });
-    }, 15000);
-  }, [user, alertCooldowns, addAlert]);
+    };
+    try {
+      await alertWrongRoute(currentRide.id, rider.userId, user.id);
+      setTimeout(clearCooldown, 15000);
+      addAlert({
+        id: crypto.randomUUID(), type: 'info', fromUserId: user.id, fromUserName: user.name,
+        message: `Alert sent to ${rider.userName}.`, timestamp: Date.now(),
+      });
+    } catch (error) {
+      clearCooldown();
+      addAlert({
+        id: crypto.randomUUID(), type: 'info', fromUserId: user.id, fromUserName: user.name,
+        message: `Failed to alert ${rider.userName}. Please try again.`, timestamp: Date.now(),
+      });
+    }
+  }, [user, currentRide, alertCooldowns, addAlert]);
 
   const handleCopyCode = () => {
     if (currentRide) {
@@ -402,6 +405,27 @@ export default function RideViewPage() {
     } catch (error) {
       console.error(error);
       alert('Failed to close ride. Please try again.');
+    }
+  };
+
+  const handleRejoinRide = async () => {
+    if (!currentRide || !user || isLeader || currentRide.status === 'completed' || rejoining) return;
+    setRejoining(true);
+    setRejoinError('');
+    try {
+      const joined = await joinRide(currentRide.id, {
+        userId: user.id,
+        userName: user.name,
+        leader: false,
+        location: latestLocationRef.current ?? undefined,
+      });
+      hydrateRide(mapApiRideToRide(joined), mapApiRidersToSessions(joined));
+      setRideClosedByMe(false);
+      lastSentLocationAt.current = 0;
+    } catch (error) {
+      setRejoinError(error instanceof Error ? error.message : 'Failed to rejoin ride. Please try again.');
+    } finally {
+      setRejoining(false);
     }
   };
 
@@ -454,14 +478,14 @@ export default function RideViewPage() {
             <ArrowLeft className="w-5 h-5" />
           </button>
           <h1 className="text-xl font-bold text-foreground">
-            {currentRide.status === 'completed' ? 'Ride Completed ✓' : 'Ride Closed ✓'}
+            {currentRide.status === 'completed' ? 'Closed' : 'You Left'}
           </h1>
           <div className="w-5" />
         </div>
 
         {currentRide.status !== 'completed' && (
           <p className="mb-4 rounded-lg border border-red-500/50 bg-red-500/10 px-3 py-2 text-sm text-red-400">
-            You closed this ride. It continues for the other riders.
+            You left this ride. It continues for the other riders.
           </p>
         )}
 
@@ -521,13 +545,17 @@ export default function RideViewPage() {
 
         {/* Action Buttons */}
         <div className="flex gap-3">
-          <Button onClick={() => navigate('/dashboard')} className="flex-1" variant="outline">
-            Back to Dashboard
-          </Button>
-          <Button onClick={() => navigate('/')} className="flex-1">
+          <Button onClick={() => navigate('/')} className="flex-1" variant="outline">
             Home
           </Button>
+          {currentRide.status !== 'completed' && !isLeader && (
+            <Button onClick={handleRejoinRide} disabled={rejoining} className="flex-1">
+              <RefreshCw className={`mr-2 h-4 w-4${rejoining ? ' animate-spin' : ''}`} />
+              {rejoining ? 'Joining...' : 'Join Back'}
+            </Button>
+          )}
         </div>
+        {rejoinError && <p role="alert" className="mt-2 text-sm text-destructive">{rejoinError}</p>}
       </div>
     );
   }
@@ -566,12 +594,12 @@ export default function RideViewPage() {
           )}
           {isLeader && currentRide.status === 'active' && (
             <Button size="sm" variant="destructive" onClick={handleEndRide} className="gap-1">
-              <Square className="w-3 h-3" /> End
+              <Square className="w-3 h-3" /> Close Ride
             </Button>
           )}
           {!isLeader && currentRide.status === 'active' && (
-            <Button size="sm" variant="outline" onClick={handleCloseRide} className="gap-1">
-              <Square className="w-3 h-3" /> Close Ride
+            <Button size="sm" variant="destructive" onClick={handleCloseRide} className="gap-1">
+              <Square className="w-3 h-3" /> Leave Ride
             </Button>
           )}
         </div>
@@ -601,7 +629,7 @@ export default function RideViewPage() {
       </div>
 
       {/* Rescue route bar for riders receiving an SOS */}
-      {isReceivingSOS && activeSOS && dismissedSOSIds.has(sosNotificationId) && (
+      {isReceivingSOS && activeSOS && popupSOSId !== sosNotificationId && !isSOSRouteDismissed && (
         <div
           className="absolute left-4 right-24 bottom-44 z-[1000] rounded-xl border-2 border-red-300 bg-white p-3 shadow-xl text-gray-900"
           style={{ fontFamily: 'Inter, "Segoe UI", Roboto, Arial, sans-serif' }}
@@ -630,7 +658,10 @@ export default function RideViewPage() {
               <button
                 type="button"
                 className="h-9 w-9 shrink-0 rounded-full bg-red-600 text-white shadow-md flex items-center justify-center hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300"
-                onClick={() => setRescueRoute(null)}
+                onClick={() => {
+                  acknowledgeNotification(sosRouteDismissalId);
+                  saveRescueRoute(sosNotificationId, null);
+                }}
                 aria-label="Clear route"
                 title="Clear route"
               >
@@ -640,8 +671,25 @@ export default function RideViewPage() {
           ) : (
             <div className="flex items-center gap-2">
               <p className="min-w-0 flex-1 text-sm font-extrabold truncate">🚨 {activeSOS.userName} needs help</p>
-              <Button size="sm" className="h-8 gap-1 bg-red-600 font-bold text-white hover:bg-red-700" onClick={handleRouteToSOS} disabled={rescueLoading}>
-                <Navigation className="w-4 h-4" /> {rescueLoading ? 'Routing...' : 'Route'}
+              <Button
+                size="icon"
+                className="h-8 w-8 shrink-0 rounded-full bg-blue-600 text-white hover:bg-blue-700"
+                onClick={handleRouteToSOS}
+                disabled={rescueLoading}
+                aria-label="Route"
+                title="Route"
+              >
+                <Navigation className={`h-4 w-4${rescueLoading ? ' animate-pulse' : ''}`} />
+              </Button>
+              <Button
+                size="icon"
+                variant="destructive"
+                className="h-8 w-8 shrink-0 rounded-full bg-red-600 text-white hover:bg-red-700"
+                aria-label="Cancel"
+                title="Cancel"
+                onClick={() => acknowledgeNotification(sosRouteDismissalId)}
+              >
+                <X className="h-4 w-4" />
               </Button>
             </div>
           )}
@@ -660,7 +708,7 @@ export default function RideViewPage() {
       </div>
 
       {/* Dismissing a notification does not cancel the sender's SOS. */}
-      {activeSOS && activeSOS.userId !== user.id && !dismissedSOSIds.has(sosNotificationId) && (
+      {activeSOS && activeSOS.userId !== user.id && popupSOSId === sosNotificationId && (
         <div
           className="absolute inset-0 z-[1100] bg-red-950/85 backdrop-blur-sm flex items-center justify-center p-4"
           style={{ fontFamily: 'Inter, "Segoe UI", Roboto, Arial, sans-serif' }}
@@ -690,7 +738,7 @@ export default function RideViewPage() {
               </Button>
               <Button
                 className="mt-3 h-12 w-full bg-gray-900 text-lg font-bold text-white hover:bg-gray-800"
-                onClick={() => setDismissedSOSIds((previous) => new Set(previous).add(sosNotificationId))}
+                onClick={() => setPopupSOSId(null)}
               >
                 Cancel
               </Button>
@@ -736,7 +784,7 @@ export default function RideViewPage() {
         </div>
         <div className="flex items-center justify-between px-4 pb-2">
           <span className="text-sm font-semibold text-foreground">{liveRiders.length} Riders</span>
-          <button onClick={() => setPanelOpen(!panelOpen)} className="text-muted-foreground">
+          <button onClick={() => setPanelOpen(!panelOpen)} aria-label={panelOpen ? 'Hide riders' : 'Show riders'} className="text-muted-foreground">
             {panelOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
           </button>
         </div>

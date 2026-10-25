@@ -1,5 +1,15 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type { Ride, RiderSession, Alert, LatLng } from '@/types';
+
+export interface RescueRoute {
+  sosId: string;
+  targetName: string;
+  geometry: LatLng[];
+  distance: number;
+  duration: number;
+  direct: boolean;
+}
 
 interface SOSAlert {
   userId: string;
@@ -14,6 +24,10 @@ interface RideState {
   alerts: Alert[];
   rideHistory: Ride[];
   activeSOS: SOSAlert | null;
+  notificationReceipts: Record<string, true>;
+  rescueRoutes: Record<string, RescueRoute>;
+  acknowledgeNotification: (id: string) => void;
+  saveRescueRoute: (id: string, route: RescueRoute | null) => void;
 
   createRide: (ride: Ride) => void;
   joinRide: (ride: Ride, rider: RiderSession) => void;
@@ -30,12 +44,25 @@ interface RideState {
   hydrateRide: (ride: Ride, riders: RiderSession[]) => void;
 }
 
-export const useRideStore = create<RideState>((set, get) => ({
+export const useRideStore = create<RideState>()(persist((set, get) => ({
   currentRide: null,
   riders: new Map(),
   alerts: [],
   rideHistory: [],
   activeSOS: null,
+  notificationReceipts: {},
+  rescueRoutes: {},
+
+  acknowledgeNotification: (id) => {
+    set({ notificationReceipts: { ...get().notificationReceipts, [id]: true } });
+  },
+
+  saveRescueRoute: (id, route) => {
+    const rescueRoutes = { ...get().rescueRoutes };
+    if (route) rescueRoutes[id] = route;
+    else delete rescueRoutes[id];
+    set({ rescueRoutes });
+  },
 
   createRide: (ride) => {
     set({ currentRide: ride, riders: new Map() });
@@ -121,4 +148,7 @@ export const useRideStore = create<RideState>((set, get) => ({
     ridersList.forEach((r) => riders.set(r.userId, r));
     set({ currentRide: ride, riders });
   },
+}), {
+  name: 'rider-route-notifications',
+  partialize: (state) => ({ notificationReceipts: state.notificationReceipts, rescueRoutes: state.rescueRoutes }),
 }));
