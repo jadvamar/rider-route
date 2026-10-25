@@ -104,7 +104,7 @@ export default function AuthPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              minLength={8}
+              minLength={isLogin ? undefined : 8}
               className="bg-background/50 border-border/50 pr-12"
             />
             <Button

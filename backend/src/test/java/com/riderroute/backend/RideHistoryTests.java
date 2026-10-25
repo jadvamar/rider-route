@@ -40,7 +40,7 @@ class RideHistoryTests {
     private RideRepository repoFor(Ride ride) {
         RideRepository repository = mock(RideRepository.class);
         when(repository.findById("ride-1")).thenReturn(Optional.of(ride));
-        when(repository.findAll()).thenReturn(List.of(ride));
+        when(repository.findByLeaderIdOrRidersUserId(anyString(), anyString())).thenReturn(List.of(ride));
         when(repository.save(any(Ride.class))).thenAnswer(invocation -> invocation.getArgument(0));
         return repository;
     }
@@ -48,13 +48,16 @@ class RideHistoryTests {
     @Test
     void riderRemovingARideOnlyHidesItForThemselves() {
         Ride ride = sharedRide();
-        RideService service = new RideService(repoFor(ride));
+        RideRepository repository = repoFor(ride);
+        RideService service = new RideService(repository);
 
         service.hideRideForUser("ride-1", "rider");
 
         assertTrue(service.listRidesByUser("rider").isEmpty());
         assertEquals(1, service.listRidesByUser("leader").size());
         assertEquals(2, ride.getRiders().size(), "ride members are untouched");
+        verify(repository).findByLeaderIdOrRidersUserId("rider", "rider");
+        verify(repository, never()).findAll();
     }
 
     @Test

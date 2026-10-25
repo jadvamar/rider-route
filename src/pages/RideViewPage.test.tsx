@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import RideViewPage from './RideViewPage';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useRideStore } from '@/store/useRideStore';
-import { alertWrongRoute, cancelSOS, closeRideForRider, getRideById, joinRide, updateRiderLocation, type ApiRide } from '@/services/api';
+import { alertWrongRoute, cancelSOS, closeRideForRider, getRideById, joinRide, triggerSOS, updateRiderLocation, type ApiRide } from '@/services/api';
 import { playSOSSound } from '@/lib/soundNotification';
 import { fetchRoutes } from '@/services/routingService';
 
@@ -115,6 +115,125 @@ describe('received SOS notifications', () => {
     expect(useRideStore.getState().alerts).toHaveLength(0);
   });
 
+  it('does not show or update an old ride while the requested ride is loading', async () => {
+    const { mapApiRideToRide } = await import('@/services/rideMapper');
+    useRideStore.getState().hydrateRide(mapApiRideToRide({ ...makeRide(), id: 'old-ride', name: 'Old ride' }), []);
+    let resolveRide!: (ride: ApiRide) => void;
+    vi.mocked(getRideById).mockReturnValue(new Promise((resolve) => { resolveRide = resolve; }));
+    mapProps.last = null;
+    await openRide();
+
+    expect(screen.getByText('Joining ride...')).toBeInTheDocument();
+    expect(screen.queryByText('Old ride')).not.toBeInTheDocument();
+    expect(updateRiderLocation).not.toHaveBeenCalled();
+    expect(mapProps.last).toBeNull();
+
+    await act(async () => { resolveRide({ ...makeRide(), activeSOS: undefined }); });
+    expect(screen.getByText('Group ride')).toBeInTheDocument();
+    expect(useRideStore.getState().currentRide?.id).toBe('ride-1');
+  });
+
+  it('shows a recoverable load error instead of endless loading', async () => {
+    vi.mocked(getRideById).mockRejectedValueOnce(new Error('Ride not found'));
+    vi.mocked(getRideById).mockResolvedValue({ ...makeRide(), activeSOS: undefined });
+    await openRide();
+    expect(screen.getByRole('alert')).toHaveTextContent('Unable to load ride: Ride not found');
+    expect(screen.queryByText('Joining ride...')).not.toBeInTheDocument();
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText('Group ride')).toBeInTheDocument();
+  });
+
+  it('does not claim SOS is active when sending fails', async () => {
+    vi.mocked(getRideById).mockResolvedValue({ ...makeRide(), activeSOS: undefined });
+    vi.mocked(triggerSOS).mockRejectedValueOnce(new Error('offline'));
+    await openRide();
+    fireEvent.click(screen.getByRole('button', { name: 'SOS' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'CONFIRM' })); });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('SOS could not be sent');
+    expect(screen.queryByRole('button', { name: 'ACTIVE' })).not.toBeInTheDocument();
+    expect(useRideStore.getState().activeSOS).toBeNull();
+    expect(useRideStore.getState().alerts.some((alert) => alert.type === 'sos')).toBe(false);
+  });
+
+  it('uses the server SOS response on successful sending', async () => {
+    const ride = { ...makeRide(), activeSOS: undefined };
+    const confirmedSOS = { userId: 'receiver', userName: 'Receiver', timestamp: 3000, location: gps.location! };
+    vi.mocked(getRideById).mockResolvedValue(ride);
+    vi.mocked(triggerSOS).mockResolvedValueOnce({ ...ride, activeSOS: confirmedSOS });
+    await openRide();
+    fireEvent.click(screen.getByRole('button', { name: 'SOS' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'CONFIRM' })); });
+
+    expect(screen.getByRole('button', { name: 'ACTIVE' })).toBeInTheDocument();
+    expect(useRideStore.getState().activeSOS).toEqual(confirmedSOS);
+  });
+
+  it('keeps SOS active and reports an error when cancellation fails', async () => {
+    useAuthStore.setState({ user: { id: 'sender', name: 'Sender', email: 'sender@example.com' } });
+    vi.mocked(getRideById).mockResolvedValue(makeRide());
+    vi.mocked(cancelSOS).mockRejectedValueOnce(new Error('offline'));
+    await openRide();
+    fireEvent.click(screen.getByRole('button', { name: 'ACTIVE' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'CANCEL?' })); });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('SOS could not be cancelled. It remains active.');
+    expect(useRideStore.getState().activeSOS?.userId).toBe('sender');
+    expect(screen.queryByText('SOS ALERT CANCELLED')).not.toBeInTheDocument();
+  });
+
+  it('keeps SOS active until the server confirms successful cancellation', async () => {
+    useAuthStore.setState({ user: { id: 'sender', name: 'Sender', email: 'sender@example.com' } });
+    vi.mocked(getRideById).mockResolvedValue(makeRide());
+    let confirmCancel!: (ride: ApiRide) => void;
+    vi.mocked(cancelSOS).mockReturnValueOnce(new Promise((resolve) => { confirmCancel = resolve; }));
+    await openRide();
+    fireEvent.click(screen.getByRole('button', { name: 'ACTIVE' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'CANCEL?' })); });
+
+    expect(useRideStore.getState().activeSOS?.userId).toBe('sender');
+    expect(screen.getByRole('button', { name: 'ACTIVE' })).toBeDisabled();
+    await act(async () => { confirmCancel({ ...makeRide(), activeSOS: undefined }); });
+
+    expect(useRideStore.getState().activeSOS).toBeNull();
+    expect(screen.queryByText('SOS ALERT CANCELLED')).not.toBeInTheDocument();
+    expect(useRideStore.getState().alerts).toEqual([]);
+  });
+
+  it('clears another ride alerts and SOS when a different ride is loaded', async () => {
+    const oldRide = { ...makeRide(), id: 'old-ride', activeSOS: undefined };
+    const { mapApiRideToRide } = await import('@/services/rideMapper');
+    useRideStore.getState().hydrateRide(mapApiRideToRide(oldRide), []);
+    useRideStore.getState().addAlert({
+      id: 'old-alert', type: 'info', fromUserId: 'receiver', fromUserName: 'Receiver',
+      message: 'Old ride warning', timestamp: 1000,
+    });
+    useRideStore.getState().setActiveSOS(makeRide().activeSOS!);
+    vi.mocked(getRideById).mockResolvedValue({ ...makeRide(), activeSOS: undefined });
+    await openRide();
+
+    expect(screen.queryByText('Old ride warning')).not.toBeInTheDocument();
+    expect(useRideStore.getState().alerts).toEqual([]);
+    expect(useRideStore.getState().activeSOS).toBeNull();
+  });
+
+  it('clears live ride and alert state on logout', async () => {
+    vi.mocked(getRideById).mockResolvedValue(makeRide());
+    await openRide();
+    cleanup();
+    useRideStore.getState().addAlert({
+      id: 'warning', type: 'info', fromUserId: 'receiver', fromUserName: 'Receiver', message: 'Warning', timestamp: 1000,
+    });
+    useAuthStore.getState().logout();
+
+    expect(useRideStore.getState().currentRide).toBeNull();
+    expect(useRideStore.getState().activeSOS).toBeNull();
+    expect(useRideStore.getState().alerts).toEqual([]);
+    expect(useRideStore.getState().riders.size).toBe(0);
+  });
+
   it.each([
     { userId: 'sender', isLeader: true },
     { userId: 'receiver', isLeader: false },
@@ -133,11 +252,42 @@ describe('received SOS notifications', () => {
       expect(screen.queryByRole('button', { name: 'Copy Code' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Start' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Start Ride' })).not.toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Show riders' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Show riders' })).not.toBeInTheDocument();
     }
     vi.mocked(getRideById).mockResolvedValue({ ...makeRide(), status: 'ACTIVE', activeSOS: undefined });
     await poll();
     expect(screen.queryByRole('heading', { name: /Waiting for/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show riders' })).toBeInTheDocument();
+  });
+
+  it('shows only journey info to a waiting normal rider and unlocks rider details once started', async () => {
+    gps.location = { lat: 0, lng: 0.05 };
+    const ride: ApiRide = {
+      ...makeRide(), activeSOS: undefined, status: 'WAITING',
+      route: [{ lat: 0, lng: 0 }, { lat: 0, lng: 0.1 }],
+      distanceMeters: 12000, durationSeconds: 1800,
+    };
+    vi.mocked(getRideById).mockResolvedValue(ride);
+    await openRide();
+
+    expect(screen.getByText('6.0 km left')).toBeInTheDocument();
+    expect(screen.getByText('15 min estimated')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Show riders' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Alert Sender/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'SOS' })).not.toBeInTheDocument();
+    expect(screen.queryByText('2 riders')).not.toBeInTheDocument();
+    expect(useRideStore.getState().riders.size).toBe(0);
+    expect((mapProps.last as unknown as { riders: unknown[] }).riders).toEqual([]);
+    expect(updateRiderLocation).not.toHaveBeenCalled();
+    await poll();
+    expect(updateRiderLocation).not.toHaveBeenCalled();
+
+    vi.mocked(getRideById).mockResolvedValue({ ...ride, status: 'ACTIVE' });
+    await poll();
+    expect(screen.getByRole('button', { name: 'Show riders' })).toBeInTheDocument();
+    expect(screen.getByText('2 riders')).toBeInTheDocument();
+    expect(useRideStore.getState().riders.size).toBe(2);
+    expect(updateRiderLocation).toHaveBeenCalled();
   });
 
   it('does not repeat an already received SOS or route automatically after returning', async () => {

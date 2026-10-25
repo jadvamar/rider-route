@@ -9,6 +9,7 @@ import com.riderroute.backend.model.RideStatus;
 import com.riderroute.backend.model.RiderSession;
 import com.riderroute.backend.repository.RideRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.dao.OptimisticLockingFailureException;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -16,6 +17,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
 
 @Service
 public class RideService {
@@ -44,7 +46,7 @@ public class RideService {
     }
 
     public Ride updateRide(String rideId, UpdateRideRequest request) {
-        Ride ride = getRideById(rideId);
+        return mutateRide(rideId, ride -> {
         if (!request.getUserId().equals(ride.getLeaderId())) {
             throw new SecurityException("Only the ride leader can edit this ride");
         }
@@ -59,7 +61,8 @@ public class RideService {
         ride.setRoute(request.getRoute());
         ride.setDistanceMeters(request.getDistanceMeters());
         ride.setDurationSeconds(request.getDurationSeconds());
-        return rideRepository.save(ride);
+        return true;
+        });
     }
 
     public Ride getRideById(String rideId) {
@@ -75,7 +78,7 @@ public class RideService {
     }
 
     public List<Ride> listRidesByUser(String userId) {
-        return rideRepository.findAll().stream()
+        return rideRepository.findByLeaderIdOrRidersUserId(userId, userId).stream()
                 .filter(ride -> ride.getHiddenFor() == null || !ride.getHiddenFor().contains(userId))
                 .filter(ride -> userId.equals(ride.getLeaderId())
                         || ride.getRiders().stream().anyMatch(rider -> userId.equals(rider.getUserId())))
@@ -84,7 +87,7 @@ public class RideService {
 
     /** Removes the ride from this user's history only, without deleting the stored ride. */
     public void hideRideForUser(String rideId, String userId) {
-        Ride ride = getRideById(rideId);
+        mutateRide(rideId, ride -> {
         Set<String> members = new HashSet<>();
         if (ride.getLeaderId() != null) {
             members.add(ride.getLeaderId());
@@ -102,11 +105,12 @@ public class RideService {
                     rider.forgetLocation();
                 });
         ride.setHiddenFor(hidden);
-        rideRepository.save(ride);
+        return true;
+        });
     }
 
     public Ride joinRide(String rideId, JoinRideRequest request) {
-        Ride ride = getRideById(rideId);
+        return mutateRide(rideId, ride -> {
         if (ride.getStatus() == RideStatus.COMPLETED) {
             throw new IllegalArgumentException("Completed rides cannot be joined");
         }
@@ -143,17 +147,18 @@ public class RideService {
             rider.setRouteFollowed(new ArrayList<>());
             ride.getRiders().add(rider);
         }
-        return rideRepository.save(ride);
+        return true;
+        });
     }
 
     public Ride updateLocation(String rideId, String userId, LocationUpdateRequest request) {
-        Ride ride = getRideById(rideId);
+        return mutateRide(rideId, ride -> {
         RiderSession rider = ride.getRiders().stream()
                 .filter(r -> r.getUserId().equals(userId))
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("Rider not found in ride"));
-        if (rider.isClosed() || rider.isLeft()) {
-            return ride;
+        if (ride.getStatus() == RideStatus.COMPLETED || rider.isClosed() || rider.isLeft()) {
+            return false;
         }
 
         rider.setLocation(request.getLocation());
@@ -171,12 +176,13 @@ public class RideService {
         trail.add(request.getLocation());
         rider.setRouteFollowed(trail);
 
-        return rideRepository.save(ride);
+        return true;
+        });
     }
 
     /** Closes the ride for one non-leader rider only; the ride keeps going for everyone else. */
     public Ride closeRideForRider(String rideId, String userId) {
-        Ride ride = getRideById(rideId);
+        return mutateRide(rideId, ride -> {
         if (userId.equals(ride.getLeaderId())) {
             throw new IllegalArgumentException("The leader ends the ride for everyone instead");
         }
@@ -188,25 +194,35 @@ public class RideService {
             rider.setClosed(true);
             rider.setClosedAt(Instant.now());
             rider.forgetLocation();
-            ride = rideRepository.save(ride);
+            return true;
         }
-        return ride;
+        return false;
+        });
     }
 
     public Ride updateRideStatus(String rideId, RideStatus status) {
-        Ride ride = getRideById(rideId);
+        return mutateRide(rideId, ride -> {
+        if (ride.getStatus() == RideStatus.COMPLETED && status != RideStatus.COMPLETED) {
+            throw new IllegalArgumentException("Completed rides cannot be reopened");
+        }
         ride.setStatus(status);
-        return rideRepository.save(ride);
+        if (status == RideStatus.COMPLETED) ride.setActiveSOS(null);
+        return true;
+        });
     }
 
     public Ride triggerSOS(String rideId, String userId, String userName, com.riderroute.backend.model.LatLng location) {
-        Ride ride = getRideById(rideId);
+        return mutateRide(rideId, ride -> {
+        if (ride.getStatus() != RideStatus.ACTIVE) {
+            throw new IllegalArgumentException("SOS can only be sent during an ongoing ride");
+        }
         ride.setActiveSOS(new com.riderroute.backend.model.SOSAlert(userId, userName, location, System.currentTimeMillis()));
-        return rideRepository.save(ride);
+        return true;
+        });
     }
 
-        public Ride alertWrongRoute(String rideId, String targetUserId, String fromUserId) {
-        Ride ride = getRideById(rideId);
+    public Ride alertWrongRoute(String rideId, String targetUserId, String fromUserId) {
+        return mutateRide(rideId, ride -> {
         if (ride.getStatus() != RideStatus.ACTIVE) {
             throw new IllegalArgumentException("Alerts can only be sent during an ongoing ride");
         }
@@ -220,17 +236,32 @@ public class RideService {
             .orElseThrow(() -> new IllegalArgumentException("Rider is not active in this ride"));
         target.setWrongRouteAlert(new com.riderroute.backend.model.WrongRouteAlert(
             UUID.randomUUID().toString(), sender.getUserId(), sender.getUserName(), System.currentTimeMillis()));
-        return rideRepository.save(ride);
-        }
+        return true;
+        });
+    }
 
     public Ride cancelSOS(String rideId, String userId) {
-        Ride ride = getRideById(rideId);
+        return mutateRide(rideId, ride -> {
         // Only allow the user who triggered SOS to cancel it
         if (ride.getActiveSOS() != null && ride.getActiveSOS().getUserId().equals(userId)) {
             ride.setActiveSOS(null);
-            return rideRepository.save(ride);
+            return true;
         }
-        return ride;
+        return false;
+        });
+    }
+
+    private Ride mutateRide(String rideId, Function<Ride, Boolean> mutation) {
+        for (int attempt = 0; attempt < 3; attempt++) {
+            Ride ride = getRideById(rideId);
+            if (!mutation.apply(ride)) return ride;
+            try {
+                return rideRepository.save(ride);
+            } catch (OptimisticLockingFailureException conflict) {
+                if (attempt == 2) throw conflict;
+            }
+        }
+        throw new IllegalStateException("Ride update did not complete");
     }
 
     private String generateCode() {

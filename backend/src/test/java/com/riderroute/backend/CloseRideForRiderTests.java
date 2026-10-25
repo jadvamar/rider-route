@@ -207,6 +207,53 @@ class CloseRideForRiderTests {
     }
 
     @Test
+    void conflictingLocationUpdateReloadsRideAndPreservesConcurrentSOS() {
+        Ride stale = activeRide();
+        Ride fresh = activeRide();
+        fresh.setActiveSOS(new com.riderroute.backend.model.SOSAlert("other", "Other", new LatLng(13, 78), 1000L));
+        RideRepository repository = mock(RideRepository.class);
+        when(repository.findById("ride-1")).thenReturn(Optional.of(stale)).thenReturn(Optional.of(fresh));
+        when(repository.save(stale)).thenThrow(new org.springframework.dao.OptimisticLockingFailureException("Conflict"));
+        when(repository.save(fresh)).thenReturn(fresh);
+        LocationUpdateRequest request = new LocationUpdateRequest();
+        request.setLocation(new LatLng(14, 79));
+
+        Ride result = new RideService(repository).updateLocation("ride-1", "rider", request);
+
+        assertSame(fresh, result);
+        assertEquals("other", result.getActiveSOS().getUserId());
+        assertEquals(14, find(result, "rider").getLocation().lat());
+        verify(repository, times(2)).findById("ride-1");
+    }
+
+    @Test
+    void conflictingLocationUpdateDoesNotReopenARiderWhoJustLeft() {
+        Ride stale = activeRide();
+        Ride fresh = activeRide();
+        find(fresh, "rider").setClosed(true);
+        find(fresh, "rider").forgetLocation();
+        RideRepository repository = mock(RideRepository.class);
+        when(repository.findById("ride-1")).thenReturn(Optional.of(stale)).thenReturn(Optional.of(fresh));
+        when(repository.save(stale)).thenThrow(new org.springframework.dao.OptimisticLockingFailureException("Conflict"));
+        LocationUpdateRequest request = new LocationUpdateRequest();
+        request.setLocation(new LatLng(14, 79));
+
+        Ride result = new RideService(repository).updateLocation("ride-1", "rider", request);
+
+        assertTrue(find(result, "rider").isClosed());
+        assertNull(find(result, "rider").getLocation());
+        verify(repository, never()).save(fresh);
+    }
+
+    @Test
+    void legacyRideWithoutVersionIsStillAnExistingDocument() {
+        Ride ride = new Ride();
+        assertTrue(ride.isNew());
+        ride.setId("existing-ride");
+        assertFalse(ride.isNew());
+    }
+
+    @Test
     void closedFlagIsSentToClients() throws Exception {
         Ride ride = activeRide();
         serviceFor(ride).closeRideForRider("ride-1", "rider");

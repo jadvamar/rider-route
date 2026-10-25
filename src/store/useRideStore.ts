@@ -107,7 +107,7 @@ export const useRideStore = create<RideState>()(persist((set, get) => ({
   },
 
   addAlert: (alert) => {
-    set({ alerts: [alert, ...get().alerts].slice(0, 20) });
+    set({ alerts: [{ ...alert, rideId: alert.rideId ?? get().currentRide?.id }, ...get().alerts].slice(0, 20) });
   },
 
   dismissAlert: (alertId) => {
@@ -146,7 +146,7 @@ export const useRideStore = create<RideState>()(persist((set, get) => ({
   hydrateRide: (ride, ridersList) => {
     const riders = new Map<string, RiderSession>();
     ridersList.forEach((r) => riders.set(r.userId, r));
-    set({ currentRide: ride, riders });
+    set({ currentRide: ride, riders, alerts: get().currentRide?.id === ride.id ? get().alerts : [], activeSOS: ride.activeSOS ?? null });
   },
 }), {
   name: 'rider-route-notifications',

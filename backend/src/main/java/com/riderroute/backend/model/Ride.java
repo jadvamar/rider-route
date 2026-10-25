@@ -2,6 +2,9 @@ package com.riderroute.backend.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import org.springframework.data.annotation.Id;
+import org.springframework.data.annotation.Version;
+import org.springframework.data.annotation.Transient;
+import org.springframework.data.domain.Persistable;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
@@ -11,10 +14,20 @@ import java.util.List;
 import java.util.Set;
 
 @Document(collection = "rides")
-public class Ride {
+public class Ride implements Persistable<String> {
 
     @Id
     private String id;
+    @Version
+    @JsonIgnore
+    private Long version;
+
+    @Override
+    @Transient
+    @JsonIgnore
+    public boolean isNew() {
+        return id == null;
+    }
     private String name;
     private String code;
     private String leaderId;

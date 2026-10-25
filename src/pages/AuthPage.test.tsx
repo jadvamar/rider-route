@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import AuthPage from './AuthPage';
@@ -15,7 +15,7 @@ it('shows and hides the password without changing its value or submitting the fo
   fireEvent.change(screen.getByPlaceholderText('Email'), { target: { value: 'rider@example.com' } });
   fireEvent.change(password, { target: { value: 'test-password' } });
   expect(password).toHaveAttribute('type', 'password');
-  expect(password).toHaveAttribute('minlength', '8');
+  expect(password).not.toHaveAttribute('minlength');
 
   fireEvent.click(screen.getByRole('button', { name: 'Show password' }));
   expect(password).toHaveAttribute('type', 'text');
@@ -34,11 +34,23 @@ it('hides the password when switching modes and supports toggling on signup', ()
   fireEvent.click(screen.getByRole('button', { name: 'Show password' }));
   fireEvent.click(screen.getByRole('button', { name: 'Sign up' }));
   expect(screen.getByPlaceholderText('Password')).toHaveAttribute('type', 'password');
+  expect(screen.getByPlaceholderText('Password')).toHaveAttribute('minlength', '8');
 
   fireEvent.click(screen.getByRole('button', { name: 'Show password' }));
   expect(screen.getByPlaceholderText('Password')).toHaveAttribute('type', 'text');
   fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
   expect(screen.getByPlaceholderText('Password')).toHaveAttribute('type', 'password');
+  expect(screen.getByPlaceholderText('Password')).not.toHaveAttribute('minlength');
+});
+
+it('allows an existing six-character password on login', async () => {
+  auth.login.mockResolvedValueOnce(undefined);
+  render(<MemoryRouter><AuthPage /></MemoryRouter>);
+  fireEvent.change(screen.getByPlaceholderText('Email'), { target: { value: 'legacy@example.com' } });
+  fireEvent.change(screen.getByPlaceholderText('Password'), { target: { value: 'abc123' } });
+  expect(screen.getByPlaceholderText('Password')).toBeValid();
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Sign In' })); });
+  expect(auth.login).toHaveBeenCalledWith('legacy@example.com', 'abc123');
 });
 
 it('switches to signup for an unregistered email and keeps the email but clears the password', async () => {

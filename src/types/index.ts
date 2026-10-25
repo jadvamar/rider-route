@@ -56,6 +56,7 @@ export interface RiderDistance {
 
 export interface Alert {
   id: string;
+  rideId?: string;
   type: 'wrong_route' | 'sos' | 'info';
   fromUserId: string;
   fromUserName: string;

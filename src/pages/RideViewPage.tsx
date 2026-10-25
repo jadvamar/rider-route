@@ -34,6 +34,11 @@ export default function RideViewPage() {
   const [rideClosedByMe, setRideClosedByMe] = useState(false);
   const [rejoining, setRejoining] = useState(false);
   const [rejoinError, setRejoinError] = useState('');
+  const [loadedRideId, setLoadedRideId] = useState<string>();
+  const [rideLoadError, setRideLoadError] = useState('');
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [sosPending, setSOSPending] = useState(false);
+  const [sosError, setSOSError] = useState('');
   const simulationRef = useRef<number>();
   
   // Geolocation hook for real-time location tracking
@@ -48,11 +53,11 @@ export default function RideViewPage() {
   const lastSentLocationAt = useRef(0);
 
   // Compute derived state (must be before early returns)
-  const isLoadingRide = !currentRide && id;
+  const isLoadingRide = !!id && (loadedRideId !== id || currentRide?.id !== id);
   const ridersArray = useMemo(() => Array.from(riders.values()), [riders]);
-  // Riders who closed or deleted the ride no longer share their location.
-  const liveRiders = useMemo(() => ridersArray.filter((rider) => !rider.hasLeft), [ridersArray]);
   const isLeader = currentRide?.leaderId === user?.id;
+  const canViewRiders = !!currentRide && (currentRide.status !== 'waiting' || isLeader);
+  const liveRiders = useMemo(() => canViewRiders ? ridersArray.filter((rider) => !rider.hasLeft) : [], [ridersArray, canViewRiders]);
   const myLocation = riders.get(user?.id ?? '')?.location;
   const remainingJourney = useMemo(() =>
     currentRide && currentLocation ? getRemainingJourney(currentRide, currentLocation) : null,
@@ -60,9 +65,9 @@ export default function RideViewPage() {
   const sosNotificationId = activeSOS
     ? `${id}:${user?.id}:${activeSOS.userId}:${activeSOS.timestamp}`
     : '';
-  const visibleAlerts = alerts.filter((alert) =>
-    (!alert.toUserId || alert.toUserId === user?.id)
-    && (alert.type !== 'sos' || alert.fromUserId === user?.id));
+  const visibleAlerts = canViewRiders ? alerts.filter((alert) =>
+    alert.rideId === id && (!alert.toUserId || alert.toUserId === user?.id)
+    && (alert.type !== 'sos' || alert.fromUserId === user?.id)) : [];
   const isReceivingSOS = !!activeSOS && activeSOS.userId !== user?.id;
   const sosTargetLocation = activeSOS
     ? activeSOS.location ?? riders.get(activeSOS.userId)?.location
@@ -119,15 +124,27 @@ export default function RideViewPage() {
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
+    let requestInFlight = false;
+    setLoadedRideId(undefined);
+    setRideLoadError('');
+    setRideClosedByMe(false);
+    setPopupSOSId(null);
+    setSOSError('');
+    lastSentLocationAt.current = 0;
 
     const loadRide = async () => {
+      if (requestInFlight) return;
+      requestInFlight = true;
       try {
         const apiRide = await getRideById(id);
         if (cancelled) return;
         setRideClosedByMe(!!user && !!apiRide.riders?.some((r) => r.userId === user.id && (r.closed || r.left)));
         const ride = mapApiRideToRide(apiRide);
-        const mappedRiders = mapApiRidersToSessions(apiRide);
-        const previousRiders = useRideStore.getState().riders;
+        const canViewLoadedRiders = ride.status !== 'waiting' || ride.leaderId === user?.id;
+        if (!canViewLoadedRiders) ride.activeSOS = undefined;
+        const mappedRiders = canViewLoadedRiders ? mapApiRidersToSessions(apiRide) : [];
+        const previousState = useRideStore.getState();
+        const previousRiders = previousState.currentRide?.id === id ? previousState.riders : new Map<string, RiderSession>();
 
         // Backend falls back to the ride start for riders without a reported position;
         // prefer this device's GPS for me and the last known position for everyone else.
@@ -144,7 +161,7 @@ export default function RideViewPage() {
         
         // Ensure current user is in the riders list
         const userInRiders = mappedRiders.find((r) => r.userId === user?.id);
-        if (!userInRiders && user) {
+        if (!userInRiders && user && canViewLoadedRiders) {
           const initialLocation = latestLocationRef.current
             ?? previousRiders.get(user.id)?.location
             ?? ride.startLocation;
@@ -165,6 +182,8 @@ export default function RideViewPage() {
         }
         
         hydrateRide(ride, mappedRiders);
+        setLoadedRideId(id);
+        setRideLoadError('');
 
         const mySession = apiRide.riders?.find((rider) => rider.userId === user?.id);
         const notification = mySession?.wrongRouteAlert;
@@ -190,7 +209,9 @@ export default function RideViewPage() {
           }
         }
       } catch (error) {
-        console.error(error);
+        if (!cancelled) setRideLoadError(error instanceof Error ? error.message : 'Unable to load this ride.');
+      } finally {
+        requestInFlight = false;
       }
     };
 
@@ -200,11 +221,11 @@ export default function RideViewPage() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [id, user, hydrateRide, setActiveSOS, addAlert, acknowledgeNotification]);
+  }, [id, user, hydrateRide, setActiveSOS, addAlert, acknowledgeNotification, loadAttempt]);
 
   // Update user location when geolocation updates (without triggering map remount)
   useEffect(() => {
-    if (!currentRide || !user || !currentLocation) return;
+    if (!currentRide || !canViewRiders || currentRide.id !== id || loadedRideId !== id || rideLoadError || !user || !currentLocation) return;
     if (currentRide.status === 'completed' || rideClosedByMe) return;
     
     // Just update location
@@ -219,11 +240,11 @@ export default function RideViewPage() {
       onRoute: currentRide.route.length > 1 ? isOnRoute(currentLocation, currentRide.route) : true,
     }).catch((error) => console.error('Failed to sync location:', error));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentLocation, user?.id, updateRiderLocation, currentRide?.id, currentRide?.status, rideClosedByMe]);
+  }, [currentLocation, user?.id, updateRiderLocation, currentRide?.id, currentRide?.status, rideClosedByMe, id, loadedRideId, rideLoadError, canViewRiders]);
 
   // Fallback: simulate own location if geolocation fails
   useEffect(() => {
-    if (!currentRide || !user || currentRide.status !== 'active' || currentLocation) return;
+    if (!currentRide || currentRide.id !== id || loadedRideId !== id || rideLoadError || !user || currentRide.status !== 'active' || currentLocation) return;
     if (rideClosedByMe) return;
 
     // Only use mock simulation if geolocation is not available
@@ -236,93 +257,48 @@ export default function RideViewPage() {
     }, 3000);
 
     return () => clearInterval(interval);
-  }, [currentRide, user, currentLocation, riders, updateRiderLocation]);
+  }, [currentRide, user, currentLocation, riders, updateRiderLocation, rideClosedByMe, id, loadedRideId, rideLoadError]);
 
   const handleSOS = useCallback(async () => {
-    if (!user || !currentRide) {
-      console.error('❌ handleSOS: Missing user or currentRide', { user, currentRide });
-      alert('Cannot trigger SOS: Missing user or ride information');
-      return;
-    }
-    
-    console.log('🚨 handleSOS called by', user.name);
-    
-    const me = riders.get(user.id);
-    console.log('📍 Current rider:', me);
-    
-    // Create SOS object
-    const sosData = {
-      userId: user.id,
-      userName: user.name,
-      location: me?.location,
-      timestamp: Date.now(),
-    };
-    
-    // Set local active SOS state immediately (UI feedback)
-    console.log('🔴 Setting activeSOS');
-    setActiveSOS(sosData);
-    
-    // Add alert locally
-    const alertId = crypto.randomUUID();
-    console.log('📢 Adding SOS alert');
-    addAlert({
-      id: alertId,
-      type: 'sos',
-      fromUserId: user.id,
-      fromUserName: user.name,
-      message: 'EMERGENCY SOS TRIGGERED',
-      location: me?.location,
-      timestamp: sosData.timestamp,
-    });
-    
-    // Try to call API to trigger SOS (this will broadcast to backend)
+    if (!user || !currentRide || sosPending) return;
+    setSOSPending(true);
+    setSOSError('');
+    const stillCurrent = () => useRideStore.getState().currentRide?.id === currentRide.id
+      && useAuthStore.getState().user?.id === user.id;
     try {
-      console.log('📤 Calling triggerSOSApi...');
-      await triggerSOSApi(currentRide.id, user.id, user.name, me?.location);
-      console.log('✅ triggerSOSApi succeeded');
+      const confirmed = await triggerSOSApi(currentRide.id, user.id, user.name, riders.get(user.id)?.location);
+      if (!stillCurrent()) return;
+      if (!confirmed.activeSOS) throw new Error('SOS was not confirmed by the server.');
+      setActiveSOS(confirmed.activeSOS);
+      addAlert({
+        id: crypto.randomUUID(), rideId: currentRide.id, type: 'sos',
+        fromUserId: user.id, fromUserName: user.name,
+        message: 'EMERGENCY SOS TRIGGERED', timestamp: confirmed.activeSOS.timestamp,
+      });
     } catch (error) {
-      console.warn('⚠️ SOS API endpoint error (may not be implemented on backend):', error);
-      // Don't fail the whole operation - local state is already set
+      if (stillCurrent()) setSOSError('SOS could not be sent. Please try again or contact emergency services directly.');
+    } finally {
+      setSOSPending(false);
     }
-    
-    console.log('✅ SOS triggered successfully by', user.name);
-  }, [user, currentRide, riders, addAlert, setActiveSOS]);
+  }, [user, currentRide, riders, addAlert, setActiveSOS, sosPending]);
 
   const handleSOSCancel = useCallback(async () => {
-    if (!user || !currentRide) {
-      console.error('❌ handleSOSCancel: Missing user or currentRide');
-      return;
-    }
-    
-    console.log('✅ handleSOSCancel called by', user.name);
-    
-    // Clear local SOS state immediately
-    console.log('🟢 Clearing activeSOS');
-    setActiveSOS(null);
-    
-    // Add cancel alert
-    console.log('📢 Adding cancel alert');
-    addAlert({
-      id: crypto.randomUUID(),
-      type: 'info',
-      fromUserId: user.id,
-      fromUserName: user.name,
-      message: 'SOS ALERT CANCELLED',
-      timestamp: Date.now(),
-    });
-    
-    // Try to call API to cancel SOS
+    if (!user || !currentRide || sosPending) return;
+    setSOSPending(true);
+    setSOSError('');
+    const stillCurrent = () => useRideStore.getState().currentRide?.id === currentRide.id
+      && useAuthStore.getState().user?.id === user.id;
     try {
-      console.log('📤 Calling cancelSOSApi...');
-      await cancelSOSApi(currentRide.id, user.id);
-      console.log('✅ cancelSOSApi succeeded');
+      const confirmed = await cancelSOSApi(currentRide.id, user.id);
+      if (!stillCurrent()) return;
+      if (confirmed.activeSOS?.userId === user.id) throw new Error('SOS cancellation was not confirmed.');
+      setActiveSOS(confirmed.activeSOS ?? null);
     } catch (error) {
-      console.warn('⚠️ SOS cancel API endpoint error (may not be implemented on backend):', error);
-      // Don't fail - local state is already cleared
+      if (stillCurrent()) setSOSError('SOS could not be cancelled. It remains active. Please try again.');
+    } finally {
+      setSOSPending(false);
     }
-    
-    console.log('✅ SOS cancelled successfully by', user.name);
-  }, [user, currentRide, addAlert, setActiveSOS]);
+  }, [user, currentRide, setActiveSOS, sosPending]);
 
   // Auto-dismiss SOS alerts after 10 seconds
   useEffect(() => {
@@ -436,6 +412,20 @@ export default function RideViewPage() {
         <div className="text-center">
           <p className="text-muted-foreground mb-4">Not authenticated</p>
           <Button onClick={() => navigate('/')}>Go to Login</Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (rideLoadError) {
+    return (
+      <div className="h-screen bg-background flex items-center justify-center p-6">
+        <div className="max-w-sm text-center">
+          <p role="alert" className="text-destructive mb-4">Unable to load ride: {rideLoadError}</p>
+          <div className="flex justify-center gap-3">
+            <Button variant="outline" onClick={() => navigate('/dashboard')}>Dashboard</Button>
+            <Button onClick={() => setLoadAttempt((attempt) => attempt + 1)}>Retry</Button>
+          </div>
         </div>
       </div>
     );
@@ -571,7 +561,7 @@ export default function RideViewPage() {
           </button>
           <div className="flex-1 min-w-0">
             <h2 className="font-semibold text-sm text-foreground truncate">{currentRide.name}</h2>
-            <p className="text-xs text-muted-foreground">{liveRiders.length} riders</p>
+            <p className="text-xs text-muted-foreground">{canViewRiders ? `${liveRiders.length} riders` : 'Waiting to start'}</p>
           </div>
           <button onClick={handleCopyCode} className="flex items-center gap-1 text-xs bg-secondary/50 px-2.5 py-1.5 rounded-lg text-secondary-foreground font-mono">
             {currentRide.code}
@@ -605,6 +595,7 @@ export default function RideViewPage() {
         </div>
 
         {/* Alerts */}
+        {sosError && <p role="alert" className="mt-2 rounded-lg border border-red-500 bg-red-950 p-3 text-sm font-semibold text-white">{sosError}</p>}
         {visibleAlerts.length > 0 && (
           <div className="mt-2 space-y-1.5">
             {visibleAlerts.slice(0, 3).map((alert) => (
@@ -698,14 +689,14 @@ export default function RideViewPage() {
       )}
 
       {/* SOS button (floating) */}
-      <div className="absolute bottom-40 right-4 z-[1000]">
+      {canViewRiders && <div className="absolute bottom-40 right-4 z-[1000]">
         <SOSButton
           onTrigger={handleSOS}
           onCancel={handleSOSCancel}
-          disabled={currentRide.status !== 'active'}
+          disabled={currentRide.status !== 'active' || sosPending}
           isActive={activeSOS?.userId === user.id}
         />
-      </div>
+      </div>}
 
       {/* Dismissing a notification does not cancel the sender's SOS. */}
       {activeSOS && activeSOS.userId !== user.id && popupSOSId === sosNotificationId && (
@@ -750,16 +741,16 @@ export default function RideViewPage() {
       {/* Bottom panel */}
       <div
         className={`absolute bottom-0 left-0 right-0 z-[1000] glass-strong rounded-t-2xl transition-all duration-300 ${
-          panelOpen ? 'max-h-[70vh]' : 'max-h-40'
+          panelOpen && canViewRiders ? 'max-h-[70vh]' : 'max-h-40'
         }`}
       >
-        <button
+        {canViewRiders && <button
           onClick={() => setPanelOpen(!panelOpen)}
           className="w-full flex items-center justify-center py-2"
         >
           <div className="w-8 h-1 rounded-full bg-muted-foreground/30 mb-1" />
-        </button>
-        <div className="px-4 pb-3 border-b border-border/50 mb-2" aria-live="polite">
+        </button>}
+        <div className="px-4 pt-3 pb-3 border-b border-border/50 mb-2" aria-live="polite">
           <p className="text-xs text-muted-foreground mb-1">Your remaining journey to destination</p>
           {remainingJourney ? (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm font-semibold text-foreground">
@@ -782,13 +773,13 @@ export default function RideViewPage() {
           {remainingJourney && geoError && <p className="text-xs text-destructive mt-1">Using last known GPS location: {geoError.message}</p>}
           {remainingJourney && <p className="text-[10px] text-muted-foreground mt-1">Based on the selected route; not live traffic.</p>}
         </div>
-        <div className="flex items-center justify-between px-4 pb-2">
+        {canViewRiders && <div className="flex items-center justify-between px-4 pb-2">
           <span className="text-sm font-semibold text-foreground">{liveRiders.length} Riders</span>
           <button onClick={() => setPanelOpen(!panelOpen)} aria-label={panelOpen ? 'Hide riders' : 'Show riders'} className="text-muted-foreground">
             {panelOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
           </button>
-        </div>
-        {panelOpen && (
+        </div>}
+        {canViewRiders && panelOpen && (
           <div className="px-4 pb-4 overflow-y-auto max-h-[45vh]">
             <RiderList
               riders={liveRiders}
